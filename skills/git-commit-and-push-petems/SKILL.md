@@ -10,14 +10,25 @@ allowed-tools:
 
 When the user asks you to commit (and optionally push) changes, follow these steps carefully.
 
+This skill builds on established commit message conventions with petems-specific preferences layered on top. For background on why each rule exists, see the reference material below.
+
+## Reference material
+
+Read these files when you need deeper context on the reasoning behind a rule:
+
+- For the Conventional Commits v1 spec: read `${CLAUDE_SKILL_DIR}/references/conventional-commits-v1.md`
+- For the Karma runner commit convention (the original inspiration): read `${CLAUDE_SKILL_DIR}/references/karma-commit-message-convention.md`
+- For the Sparkbox semantic commit style: read `${CLAUDE_SKILL_DIR}/references/sparkbox-semantic-commit-messages.md`
+- For petems-specific preferences that go beyond the specs: read `${CLAUDE_SKILL_DIR}/references/petems-preferences.md`
+
 ## Git Safety Protocol
 
 - NEVER update the git config
 - NEVER run destructive git commands (push --force, reset --hard, checkout ., restore ., clean -f, branch -D) unless the user explicitly requests these actions
 - NEVER skip hooks (--no-verify, --no-gpg-sign, etc) unless the user explicitly requests it
-- NEVER force push to main/master — warn the user if they request it
+- NEVER force push to main/master, warn the user if they request it
 - NEVER commit directly to the trunk branch (master or main). Always create a feature branch first. Detect the trunk branch using the method described in Step 2 below.
-- CRITICAL: Always create NEW commits rather than amending, unless the user explicitly requests a git amend. When a pre-commit hook fails, the commit did NOT happen — so --amend would modify the PREVIOUS commit. Instead, after hook failure, fix the issue, re-stage, and create a NEW commit
+- CRITICAL: Always create NEW commits rather than amending, unless the user explicitly requests a git amend. When a pre-commit hook fails, the commit did NOT happen, so --amend would modify the PREVIOUS commit. Instead, after hook failure, fix the issue, re-stage, and create a NEW commit
 - When staging files, prefer adding specific files by name rather than using `git add -A` or `git add .`, which can accidentally include sensitive files (.env, credentials) or large binaries
 - NEVER commit changes unless the user explicitly asks you to
 - DO NOT push to the remote repository unless the user explicitly asks you to do so
@@ -50,23 +61,28 @@ Compare the current branch against the detected trunk branch.
 
 ### 3. Draft the commit message
 
-Analyze all staged changes (both previously staged and newly added) and draft a commit message following **Conventional Commits** format with these rules:
+Analyze all staged changes (both previously staged and newly added) and draft a commit message following **Conventional Commits** format with petems preferences applied.
+
+> The base format comes from the [Conventional Commits spec](references/conventional-commits-v1.md),
+> with type prefixes drawn from the [Karma convention](references/karma-commit-message-convention.md).
+> Where this skill diverges from those specs, see [petems preferences](references/petems-preferences.md).
 
 #### Title line
 
 - Format: `<type>(<scope>): <description>`
 - Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
-- **Maximum 50 characters** for the entire title line
-- Use **imperative mood** ("add", "fix", "update" — not "added", "fixes", "updated")
+- **Maximum 50 characters** for the entire title line (stricter than Karma's 70; follows the classic 50/72 rule)
+- Use **imperative mood** ("add", "fix", "update", not "added", "fixes", "updated")
 - Do NOT end with a period
 - Scope is optional but encouraged
 
 #### Body (details)
 
 - Separate from title with a blank line
-- Use `*` bullet points to describe what changed and why
-- Each bullet line should be ≤ 72 characters
+- Use `*` bullet points to describe what changed and why (petems preference; the specs do not mandate a bullet character)
+- Each bullet line should be ≤ 72 characters (petems preference; Karma uses 80)
 - Focus on the "why" rather than the "what"
+- Unless the change is trivial, include links to relevant references (issues, PRs, docs, design docs, etc.)
 
 #### Footer
 
@@ -87,7 +103,7 @@ Closes #42
 
 #### What NOT to commit
 
-- Files that likely contain secrets (`.env`, `credentials.json`, etc.) — warn the user if they specifically request to commit those files
+- Files that likely contain secrets (`.env`, `credentials.json`, etc.), warn the user if they specifically request to commit those files
 
 ### 4. Stage and commit
 
@@ -117,6 +133,32 @@ If the user asked to push:
 - Otherwise: `git push`
 - Report the result to the user.
 - If a new feature branch was created in Step 2, suggest the user create a pull request (but do NOT create one automatically).
+
+### 5. Semantic Branch Names
+
+When creating a new branch, use the following naming convention:
+
+```
+<type>/#<issueNumber>-<alias>
+  |         |           |
+  |         |           +---> Summary in kebab-case.
+  |         +--------------> Reference to the issue/ticket.
+  +------------------------> Type: feat, fix, docs, style, refactor, test, or chore.
+```
+
+#### Branch type prefixes
+
+| Prefix                | Purpose                                      |
+|-----------------------|----------------------------------------------|
+| `feat` or `feature`  | New feature                                  |
+| `fix`                 | Bug fix                                      |
+| `docs`                | Documentation only                           |
+| `style`               | Formatting, missing semicolons, etc.         |
+| `refactor`            | Code change that neither fixes nor adds      |
+| `test`                | Adding or updating tests                     |
+| `chore`               | Maintenance (deps, CI, build, etc.)          |
+
+> Reference: <https://gist.github.com/seunggabi/87f8c722d35cd07deb3f649d45a31082>
 
 ### 6. If pre-commit hook fails
 
