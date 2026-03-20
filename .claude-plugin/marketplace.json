@@ -11,6 +11,11 @@
       "name": "git-commit-and-push-petems",
       "source": "./",
       "description": "Commit and push with Peter's conventional commit format (50-char titles, * bullet details, imperative mood)"
+    },
+    {
+      "name": "prek-setup-petems",
+      "source": "./",
+      "description": "Set up prek git hooks with sensible defaults and language-specific linters"
     }
   ]
 }
