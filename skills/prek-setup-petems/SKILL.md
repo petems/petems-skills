@@ -88,7 +88,7 @@ Only include sections for detected languages:
 ```toml
 [[repos]]
 repo = "https://github.com/astral-sh/ruff-pre-commit"
-rev = "v0.11.4"
+rev = "v0.15.7"
 hooks = [
   { id = "ruff", args = ["--fix"] },
   { id = "ruff-format" },
@@ -99,7 +99,7 @@ hooks = [
 ```toml
 [[repos]]
 repo = "https://github.com/pre-commit/mirrors-prettier"
-rev = "v3.8.1"
+rev = "v3.1.0"
 hooks = [
   { id = "prettier" },
 ]
@@ -109,7 +109,7 @@ hooks = [
 ```toml
 [[repos]]
 repo = "https://github.com/golangci/golangci-lint"
-rev = "v2.1.0"
+rev = "v2.11.3"
 hooks = [
   { id = "golangci-lint" },
 ]
@@ -151,14 +151,14 @@ hooks = [
 ```toml
 [[repos]]
 repo = "https://github.com/nicklockwood/SwiftFormat"
-rev = "0.55.6"
+rev = "0.60.1"
 hooks = [
   { id = "swiftformat" },
 ]
 
 [[repos]]
 repo = "https://github.com/realm/SwiftLint"
-rev = "0.58.2"
+rev = "0.63.2"
 hooks = [
   { id = "swiftlint" },
 ]
@@ -168,7 +168,7 @@ hooks = [
 ```toml
 [[repos]]
 repo = "https://github.com/shellcheck-py/shellcheck-py"
-rev = "v0.10.0.1"
+rev = "v0.11.0.1"
 hooks = [
   { id = "shellcheck" },
 ]
@@ -178,7 +178,7 @@ hooks = [
 ```toml
 [[repos]]
 repo = "https://github.com/macisamuele/language-formatters-pre-commit-hooks"
-rev = "v2.14.0"
+rev = "v2.16.0"
 hooks = [
   { id = "pretty-format-java", args = ["--autofix"] },
   { id = "pretty-format-kotlin", args = ["--autofix"] },
