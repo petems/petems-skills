@@ -42,7 +42,7 @@ Run the following bash commands in parallel to understand the current state:
 
 Compare the current branch against the detected trunk branch.
 
-- **If on trunk (master or main)**: you MUST create a feature branch before committing.
+- **If on the detected trunk branch**: you MUST create a feature branch before committing.
   - Derive the branch name from the planned commit type and a short slug of the description, e.g. `feat/add-oauth-login`, `fix/null-pointer-in-parser`, `refactor/extract-auth-middleware`.
   - Run `git checkout -b <branch-name>`.
   - Inform the user: "Created branch `<branch-name>` to avoid committing directly to `<trunk>`."
