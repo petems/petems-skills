@@ -98,7 +98,7 @@ hooks = [
 ```toml
 [[repos]]
 repo = "https://github.com/pre-commit/mirrors-prettier"
-rev = "v4.0.0-alpha.8"
+rev = "v3.8.1"
 hooks = [
   { id = "prettier" },
 ]
@@ -150,7 +150,7 @@ hooks = [
 ```toml
 [[repos]]
 repo = "https://github.com/nicklockwood/SwiftFormat"
-rev = "0.55.8"
+rev = "0.55.6"
 hooks = [
   { id = "swiftformat" },
 ]
