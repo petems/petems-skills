@@ -36,6 +36,7 @@ Run the following bash commands in parallel to understand the current state:
 Analyze all staged changes (both previously staged and newly added) and draft a commit message following **Conventional Commits** format with these rules:
 
 #### Title line
+
 - Format: `<type>(<scope>): <description>`
 - Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
 - **Maximum 50 characters** for the entire title line
@@ -44,18 +45,20 @@ Analyze all staged changes (both previously staged and newly added) and draft a 
 - Scope is optional but encouraged
 
 #### Body (details)
+
 - Separate from title with a blank line
 - Use `*` bullet points to describe what changed and why
 - Each bullet line should be ≤ 72 characters
 - Focus on the "why" rather than the "what"
 
 #### Footer
+
 - Reference GitHub issues/PRs using standard shorthand: `#123`
 - Use `Closes #123` or `Fixes #123` when the commit resolves an issue
 
 #### Example
 
-```
+```text
 feat(auth): add OAuth2 login support
 
 * Add OAuth2 provider configuration
@@ -66,6 +69,7 @@ Closes #42
 ```
 
 #### What NOT to commit
+
 - Files that likely contain secrets (`.env`, `credentials.json`, etc.) — warn the user if they specifically request to commit those files
 
 ### 3. Stage and commit

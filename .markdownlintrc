@@ -1,0 +1,7 @@
+{
+  "line-length": {
+    "line_length": 300
+  },
+  "first-line-heading": false,
+  "ignore": ["LICENSE.md"]
+}
