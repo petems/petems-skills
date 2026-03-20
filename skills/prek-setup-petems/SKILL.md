@@ -19,6 +19,7 @@ Look for existing hook configuration files:
 - `.pre-commit-config.yaml`
 
 If either exists, ask the user whether to **overwrite**, **merge** with the new config, or **leave it** unchanged. Do not proceed until the user confirms.
+If the user chooses **leave it unchanged**, stop the workflow and report that no changes were made.
 
 ## Step 2: Ensure prek is installed
 
