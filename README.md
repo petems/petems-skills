@@ -6,9 +6,10 @@ These are mostly just a matter of taste for me, as they're generally just slight
 
 ## Available Skills
 
-| Skill                                                                      | Description                                              |
-|----------------------------------------------------------------------------|----------------------------------------------------------|
-| [git-commit-and-push-petems](skills/git-commit-and-push-petems/SKILL.md)   | Commit and push with Peter's conventional commit format  |
+| Skill                                                                      | Description                                                                |
+|----------------------------------------------------------------------------|----------------------------------------------------------------------------|
+| [git-commit-and-push-petems](skills/git-commit-and-push-petems/SKILL.md)   | Commit and push with Peter's conventional commit format                    |
+| [prek-setup-petems](skills/prek-setup-petems/SKILL.md)                     | Set up prek git hooks with sensible defaults and language-specific linters |
 
 Works with any agent that supports [Agent Skills](https://agentskills.io) (Claude Code, Cursor, Codex, etc.):
 
