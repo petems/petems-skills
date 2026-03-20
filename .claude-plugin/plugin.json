@@ -1,0 +1,13 @@
+{
+  "name": "petems-skills",
+  "description": "Generalist Claude Code skills collection by petems",
+  "version": "0.1.0",
+  "author": {
+    "name": "Peter Souter",
+    "url": "https://github.com/petems"
+  },
+  "homepage": "https://github.com/petems/petems-skills",
+  "repository": "https://github.com/petems/petems-skills",
+  "license": "MIT",
+  "keywords": ["claude-code", "skills", "git", "workflow"]
+}

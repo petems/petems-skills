@@ -1,0 +1,16 @@
+{
+  "name": "petems-skills",
+  "owner": {
+    "name": "Peter Souter"
+  },
+  "metadata": {
+    "description": "Generalist Claude Code skills collection by petems"
+  },
+  "plugins": [
+    {
+      "name": "git-commit-and-push-petems",
+      "source": "./",
+      "description": "Commit and push with Peter's conventional commit format (50-char titles, * bullet details, imperative mood)"
+    }
+  ]
+}
