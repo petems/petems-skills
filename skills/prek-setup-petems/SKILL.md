@@ -205,11 +205,11 @@ Run prek across all files to catch and auto-fix issues:
 prek run --all-files
 ```
 
-If there are auto-fixable issues, let prek fix them and re-run until clean. If issues remain that require manual intervention, report them to the user.
+If there are auto-fixable issues, let prek fix them and re-run up to 3 times. If issues still remain (or output does not converge), stop and report remaining failures for manual intervention.
 
 ## Step 7: Stage config (do NOT commit)
 
-Stage the new `prek.toml` (and any auto-fixed files) with `git add`, but do **not** commit.
+Stage only the new `prek.toml` and files modified by this prek run (do not stage unrelated pre-existing changes), then do **not** commit.
 
 Tell the user:
 - Setup is complete
