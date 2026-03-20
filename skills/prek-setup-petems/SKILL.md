@@ -128,7 +128,7 @@ hooks = [
 ```toml
 [[repos]]
 repo = "https://github.com/rubocop/rubocop"
-rev = "v1.75.2"
+rev = "v1.85.1"
 hooks = [
   { id = "rubocop" },
 ]
@@ -138,7 +138,7 @@ hooks = [
 ```toml
 [[repos]]
 repo = "https://github.com/antonbabenko/pre-commit-terraform"
-rev = "v1.99.1"
+rev = "v1.105.0"
 hooks = [
   { id = "terraform_fmt" },
   { id = "terraform_validate" },
