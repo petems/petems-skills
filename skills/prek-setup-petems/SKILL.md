@@ -56,6 +56,7 @@ Use Glob to check for marker files that indicate which languages the project use
 | `Package.swift`, `*.xcodeproj` | Swift |
 | `pom.xml`, `build.gradle`, `build.gradle.kts` | Java/Kotlin |
 | `**/*.sh` | Shell |
+| `**/*.md`, `hugo.toml`, `hugo.yaml`, `config.toml` (Hugo), `mkdocs.yml` | Markdown/Blog |
 
 Report detected languages to the user before continuing.
 
@@ -182,6 +183,23 @@ rev = "v2.16.0"
 hooks = [
   { id = "pretty-format-java", args = ["--autofix"] },
   { id = "pretty-format-kotlin", args = ["--autofix"] },
+]
+```
+
+**Markdown/Blog:**
+```toml
+[[repos]]
+repo = "https://github.com/igorshubovych/markdownlint-cli"
+rev = "v0.48.0"
+hooks = [
+  { id = "markdownlint", args = ["--fix"] },
+]
+
+[[repos]]
+repo = "https://github.com/pre-commit/mirrors-prettier"
+rev = "v3.1.0"
+hooks = [
+  { id = "prettier", types_or = ["markdown", "yaml"], args = ["--prose-wrap", "preserve"] },
 ]
 ```
 
