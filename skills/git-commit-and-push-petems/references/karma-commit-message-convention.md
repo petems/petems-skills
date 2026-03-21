@@ -51,7 +51,7 @@ The scope narrows what part of the codebase is affected. Examples from Karma: `i
 
 ## Footer
 
-- **Closing issues**: `Closes #234` or `Closes #123, #245, #992`.
+- **Closing issues**: `Closes #234`, `Fixes #234`, or `Closes #123, #245, #992`.
 - **Breaking changes**: Start with `BREAKING CHANGE:` followed by a description of the change, a justification, and migration instructions.
 
 ## Example
