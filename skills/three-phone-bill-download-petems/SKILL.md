@@ -93,7 +93,10 @@ Confirm both parameters with the user before proceeding.
 4. Use `get_network_request` with `responseFilePath: "/tmp/three_bill_temp.pdf"` to save the PDF to disk.
 5. If no PDF network request is detected:
    - Wait 3 seconds and re-check `list_network_requests`. Retry up to 3 times.
-   - **Fallback**: Use `evaluate_script` to search the page DOM for `<a>` tags with `href` containing `.pdf` or a `download` attribute. Extract the full URL and use Bash with `curl` to download it.
+   - **Fallback 1**: Use `evaluate_script` to find `<a>` tags with `.pdf` hrefs or a `download` attribute.
+     Extract the URL and use `get_network_request` with `responseFilePath: "/tmp/three_bill_temp.pdf"` to save
+     the PDF via the browser (which carries session cookies).
+   - **Fallback 2 (last resort)**: If browser-context retrieval also fails, use Bash with `curl` to download the URL. Note that `curl` does not share the browser's session cookies, so this will fail for session-protected endpoints.
 
 ### 8. Rename and move the file
 
@@ -101,13 +104,17 @@ Confirm both parameters with the user before proceeding.
    - Format: `Three_UK_Bill_<Month>_<Year>_GBP<Amount>.pdf`
    - Example: `Three_UK_Bill_March_2026_GBP45.99.pdf`
    - If the amount could not be determined, omit it: `Three_UK_Bill_March_2026.pdf`
-2. Use Bash to move the file from the temp path to the final destination:
+2. Use Bash to move the file from the temp path to the user-confirmed final destination:
 
    ```bash
-   mv /tmp/three_bill_temp.pdf ~/Desktop/Three_UK_Bill_March_2026_GBP45.99.pdf
+   mv /tmp/three_bill_temp.pdf "<SAVE_LOCATION>/Three_UK_Bill_<Month>_<Year>_GBP<Amount>.pdf"
    ```
 
-3. Confirm the file exists and has a non-zero size using `ls -la`.
+3. Confirm the file exists and has a non-zero size:
+
+   ```bash
+   test -s "<SAVE_LOCATION>/Three_UK_Bill_<Month>_<Year>_GBP<Amount>.pdf"
+   ```
 
 ### 9. Verify the PDF
 
@@ -132,7 +139,7 @@ If verification fails, warn the user with specific details about what did not ma
 | Cookie banner blocking | Click accept/dismiss, continue |
 | Target month not found | List available months, ask user to pick one |
 | No download button found | Take a screenshot for visual inspection, ask user for guidance |
-| PDF request not captured | Wait and retry up to 3 times, then fall back to evaluate_script and curl |
+| PDF request not captured | Wait and retry up to 3 times, then fall back to evaluate_script with browser retrieval, then curl as last resort |
 | Downloaded file empty or corrupt | Warn user, suggest trying the download again manually |
 | PDF verification mismatch | Warn user with details but keep the file |
 | Multiple accounts shown | List accounts, ask user which one to use |
