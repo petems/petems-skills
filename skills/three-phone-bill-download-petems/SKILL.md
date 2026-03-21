@@ -91,9 +91,11 @@ Confirm both parameters with the user before proceeding.
 3. Use `get_network_request` with `responseFilePath: "/tmp/three_bill_temp.pdf"` to save the PDF to disk.
 4. If no PDF network request is detected:
    - Wait 3 seconds and re-check `list_network_requests`. Retry up to 3 times.
-   - **Fallback 1**: Use `evaluate_script` to find `<a>` tags with `.pdf` hrefs or a `download` attribute.
-     Extract the URL and use `get_network_request` with `responseFilePath: "/tmp/three_bill_temp.pdf"` to save
-     the PDF via the browser (which carries session cookies).
+   - **Fallback 1**: Use `evaluate_script` to find `<a>` tags with `.pdf` hrefs or a `download` attribute
+     and extract the URL. Then navigate the browser to that URL (via `navigate_page`) so the browser
+     issues the request using its existing session cookies. Capture the resulting request with
+     `list_network_requests` to obtain its `reqid`, then call `get_network_request` with that `reqid`
+     and `responseFilePath: "/tmp/three_bill_temp.pdf"` to save the PDF to disk.
    - **Fallback 2 (last resort)**: If browser-context retrieval also fails, use Bash with `curl` to download the URL. Note that `curl` does not share the browser's session cookies, so this will fail for session-protected endpoints.
 
 ### 6. Rename and move the file
@@ -104,14 +106,30 @@ Confirm both parameters with the user before proceeding.
    - If the amount could not be determined, omit it: `Three_UK_Bill_March_2026.pdf`
 2. Use Bash to move the file from the temp path to the user-confirmed final destination:
 
+   If the amount was determined:
+
    ```bash
    mv /tmp/three_bill_temp.pdf "<SAVE_LOCATION>/Three_UK_Bill_<Month>_<Year>_GBP<Amount>.pdf"
    ```
 
+   If the amount could not be determined:
+
+   ```bash
+   mv /tmp/three_bill_temp.pdf "<SAVE_LOCATION>/Three_UK_Bill_<Month>_<Year>.pdf"
+   ```
+
 3. Confirm the file exists and has a non-zero size:
+
+   If the amount was determined:
 
    ```bash
    test -s "<SAVE_LOCATION>/Three_UK_Bill_<Month>_<Year>_GBP<Amount>.pdf"
+   ```
+
+   If the amount could not be determined:
+
+   ```bash
+   test -s "<SAVE_LOCATION>/Three_UK_Bill_<Month>_<Year>.pdf"
    ```
 
 ### 7. Verify the PDF
