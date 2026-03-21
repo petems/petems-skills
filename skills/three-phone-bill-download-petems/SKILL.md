@@ -33,6 +33,7 @@ This skill requires the **Chrome DevTools MCP server** to be configured and runn
 - Install: `npx @anthropic-ai/chrome-devtools-mcp@latest` (or see the package's README for setup)
 - The MCP server must be registered in your Claude Code settings under `mcpServers`
 - Chrome (or Chromium) must be running with remote debugging enabled
+- **poppler** must be installed for PDF verification (`brew install poppler` on macOS, `apt-get install poppler-utils` on Linux). This provides `pdftotext` used to verify the downloaded bill.
 
 If any of the `mcp__chrome-devtools__*` tools are unavailable when this skill runs, stop and tell the user to set up the Chrome DevTools MCP server first.
 
@@ -45,62 +46,59 @@ Determine two things from the user's message:
 - **Target month**: Which bill to download. Default to the latest (most recent) bill if not specified.
 - **Save location**: Where to save the PDF. Default to `~/Desktop/` if not specified.
 
+**Billing cycle note**: Three UK bills are generated on the 23rd/24th of each month.
+The billing period runs from the 24th of one month to the 23rd of the next.
+Check today's date before proceeding.
+If today is before the 24th and the user asks for the current month's bill, alert them:
+"The current month's bill is not available yet.
+Three generates new bills after the 23rd.
+I will look for last month's bill instead."
+Then default to the previous month.
+
 Confirm both parameters with the user before proceeding.
 
-### 2. Navigate to Three.co.uk account area
+### 2. Navigate to Three.co.uk and handle login
 
-1. Navigate to `https://www.three.co.uk/my-account`.
+1. Navigate to `https://www.three.co.uk/customer-login`. This will redirect to the account dashboard if already logged in, or show the login form if not.
 2. Take a snapshot to assess the page state.
-
-### 3. Handle cookie banners and popups
-
-1. Check the snapshot for cookie consent overlays (look for "Accept all", "Accept cookies", or similar buttons).
-2. If found, click the accept/dismiss button.
-3. For any other popups or overlays, try pressing Escape to dismiss them.
-
-### 4. Handle login
-
-1. Take a snapshot and check for login indicators (account name visible, billing section, navigation showing "My Account" as active).
-2. If already logged in, proceed to Step 5.
-3. If not logged in (login form visible, or page redirected to a sign-in URL):
-   - Navigate to the Three.co.uk login page if not already there.
+3. Check the snapshot for cookie consent overlays (look for "Accept all", "Accept cookies", or similar buttons). If found, click the accept/dismiss button. For any other popups or overlays, try pressing Escape to dismiss them.
+4. Check for login indicators (account name visible, "Good morning" greeting, or URL is `/account`).
+5. If already logged in, proceed to Step 3.
+6. If not logged in (login form visible at `auth.three.co.uk`, or email/password fields present):
    - Tell the user: "Please log in to your Three account in the Chrome browser window. I will wait for you to complete login."
-   - Use `wait_for` with a generous timeout (120000ms) to detect login completion. Look for account-area text such as "My account", "Bills", "Your balance", or the appearance of account-specific content.
+   - Use `wait_for` with a generous timeout (120000ms) to detect login completion. Look for text such as "Good morning", "Dashboard", or "Account Number".
    - Once login is detected, take a fresh snapshot and continue.
-4. Do NOT enter credentials on behalf of the user. Never pass credentials through the skill.
+7. Do NOT enter credentials on behalf of the user. Never pass credentials through the skill.
 
-### 5. Navigate to bills section
+### 3. Navigate to bills page
 
-1. From the account page snapshot, look for a link containing "Bills", "Billing", "View bills", or "My bills".
-2. Click through to the bills listing page.
-3. Wait for the bills list to load (use `wait_for` looking for bill-related text like a month name or "bill").
-4. Take a snapshot to see available bills.
+1. Navigate directly to `https://www.three.co.uk/account/view-bill`. This takes you straight to the bill view with the latest bill pre-selected.
+2. Wait for the bill to load (use `wait_for` looking for "View bill" or "Download Bill").
+3. Take a snapshot to see the bill details.
 
-### 6. Select the target bill
+### 4. Select the target bill
 
-1. From the snapshot, identify the list of available bills (typically shown by month and year).
-2. If the user requested a specific month, find that month in the list.
+1. The latest bill should already be displayed. Check the snapshot for the bill month shown in the month selector (a combobox).
+2. If the user requested a specific month different from what is shown, click the month dropdown and select the target month.
    - If the target month is not found, list the available months and ask the user to pick one.
-3. If the user requested "latest" (the default), select the first or most recent bill.
-4. Extract the bill date (month and year) and amount from the page text. These will be used for the filename.
-5. Click on the bill to open its detail page (or the "View bill" / "Download" link).
+3. If the user requested "latest" (the default), the current view is correct.
+4. Extract the bill date (month and year) and total amount (inc VAT) from the page text. These will be used for the filename.
 
-### 7. Download the PDF
+### 5. Download the PDF
 
-1. Take a snapshot of the bill detail page to find the "Download PDF", "Download bill", or similar button/link.
-2. Click the download link/button.
-3. Use `list_network_requests` with `resourceTypes: ["fetch", "xhr", "document", "other"]` to find the PDF request. Look for a request URL containing `.pdf`, `bill`, `invoice`, or with a content-type of `application/pdf`.
-4. Use `get_network_request` with `responseFilePath: "/tmp/three_bill_temp.pdf"` to save the PDF to disk.
-5. If no PDF network request is detected:
+1. Find the "Download Bill" button in the snapshot and click it.
+2. Use `list_network_requests` with `resourceTypes: ["fetch", "xhr", "document", "other"]` to find the PDF request. Look for a request URL containing `/pdf` or with a content-type of `application/pdf`.
+3. Use `get_network_request` with `responseFilePath: "/tmp/three_bill_temp.pdf"` to save the PDF to disk.
+4. If no PDF network request is detected:
    - Wait 3 seconds and re-check `list_network_requests`. Retry up to 3 times.
    - **Fallback 1**: Use `evaluate_script` to find `<a>` tags with `.pdf` hrefs or a `download` attribute.
      Extract the URL and use `get_network_request` with `responseFilePath: "/tmp/three_bill_temp.pdf"` to save
      the PDF via the browser (which carries session cookies).
    - **Fallback 2 (last resort)**: If browser-context retrieval also fails, use Bash with `curl` to download the URL. Note that `curl` does not share the browser's session cookies, so this will fail for session-protected endpoints.
 
-### 8. Rename and move the file
+### 6. Rename and move the file
 
-1. Construct a descriptive filename using the bill date and amount from Step 6:
+1. Construct a descriptive filename using the bill date and amount from Step 4:
    - Format: `Three_UK_Bill_<Month>_<Year>_GBP<Amount>.pdf`
    - Example: `Three_UK_Bill_March_2026_GBP45.99.pdf`
    - If the amount could not be determined, omit it: `Three_UK_Bill_March_2026.pdf`
@@ -116,9 +114,9 @@ Confirm both parameters with the user before proceeding.
    test -s "<SAVE_LOCATION>/Three_UK_Bill_<Month>_<Year>_GBP<Amount>.pdf"
    ```
 
-### 9. Verify the PDF
+### 7. Verify the PDF
 
-1. Use the Read tool to view the downloaded PDF (pages "1-3").
+1. Use the Read tool to view the downloaded PDF (pages "1-3"). If the Read tool cannot render the PDF, fall back to extracting text with `pdftotext <file> -` via Bash.
 2. Check the following:
    - **Month match**: The billing period text on the PDF matches the requested month.
    - **Amount visible**: A total or payment amount is present and appears reasonable (a positive GBP value).
