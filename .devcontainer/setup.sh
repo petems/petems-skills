@@ -33,6 +33,12 @@ echo "y" | npx skills add pbakaus/agent-reviews@resolve-agent-reviews || {
     echo "⚠️  agent-reviews skill may already be installed or setup had an issue"
 }
 
+# Add petems-skills (unattended mode)
+echo "🔧 Adding petems-skills..."
+echo "y" | npx skills add petems/petems-skills || {
+    echo "⚠️  petems-skills may already be installed or setup had an issue"
+}
+
 # Install prek (pre-commit hook manager)
 echo "🪝 Installing prek..."
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/j178/prek/releases/download/v0.3.6/prek-installer.sh | sh

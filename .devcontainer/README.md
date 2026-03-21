@@ -20,12 +20,16 @@ The `setup.sh` script automatically installs and configures the following tools 
 2. **agent-reviews**: Installed globally via npm for AI-powered code review capabilities
    - Automatically adds the `pbakaus/agent-reviews@resolve-agent-reviews` skill
 
-3. **prek**: Pre-commit hook manager
+3. **petems-skills**: Generalist Claude Code skills collection
+   - Automatically adds the `petems/petems-skills` skill collection
+   - Includes custom git commit and prek setup skills
+
+4. **prek**: Pre-commit hook manager
    - Installed via official curl installer (not npm)
    - Initializes git hooks based on `prek.toml` configuration
    - Provides language-specific linting and validation
 
-4. **markdownlint-cli**: Markdown linting tool
+5. **markdownlint-cli**: Markdown linting tool
    - Ensures markdown files follow consistent formatting rules
    - Configured via `.markdownlintrc`
 
