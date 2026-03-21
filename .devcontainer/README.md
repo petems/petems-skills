@@ -12,15 +12,20 @@ This directory contains the devcontainer configuration for the petems-skills rep
 
 The `setup.sh` script automatically installs and configures the following tools when the devcontainer is created:
 
-1. **agent-reviews**: Installed globally via npm for AI-powered code review capabilities
+1. **zsh with oh-my-zsh**: Modern shell with powerful features
+   - Installed and configured as the default shell
+   - Includes the following plugins: git, rbenv, nodenv, sublime, brew, npm, yarn, dotnet, golang, web-search, claude
+   - VS Code terminal automatically uses zsh
+
+2. **agent-reviews**: Installed globally via npm for AI-powered code review capabilities
    - Automatically adds the `pbakaus/agent-reviews@resolve-agent-reviews` skill
 
-2. **prek**: Pre-commit hook manager
+3. **prek**: Pre-commit hook manager
    - Installed via official curl installer (not npm)
    - Initializes git hooks based on `prek.toml` configuration
    - Provides language-specific linting and validation
 
-3. **markdownlint-cli**: Markdown linting tool
+4. **markdownlint-cli**: Markdown linting tool
    - Ensures markdown files follow consistent formatting rules
    - Configured via `.markdownlintrc`
 

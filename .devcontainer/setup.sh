@@ -3,6 +3,25 @@ set -e
 
 echo "🚀 Setting up devcontainer baseline features..."
 
+# Install and configure zsh with oh-my-zsh
+echo "🐚 Installing and configuring zsh with oh-my-zsh..."
+# Install oh-my-zsh (unattended mode)
+if [ ! -d "$HOME/.oh-my-zsh" ]; then
+    sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+fi
+
+# Configure .zshrc with requested plugins
+if [ -f "$HOME/.zshrc" ]; then
+    # Update plugins line in .zshrc
+    sed -i 's/plugins=(git)/plugins=(git rbenv nodenv sublime brew npm yarn dotnet golang web-search claude)/' "$HOME/.zshrc"
+    echo "✅ Configured zsh plugins"
+fi
+
+# Set zsh as default shell for the user
+if [ "$SHELL" != "$(which zsh)" ]; then
+    sudo chsh -s "$(which zsh)" "$(whoami)" || echo "⚠️  Could not change default shell, but zsh is available"
+fi
+
 # Install agent-reviews globally
 echo "📦 Installing agent-reviews..."
 npm install -g agent-reviews
