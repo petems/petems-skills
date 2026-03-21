@@ -16,6 +16,11 @@
       "name": "prek-setup-petems",
       "source": "./",
       "description": "Set up prek git hooks with sensible defaults and language-specific linters"
+    },
+    {
+      "name": "three-phone-bill-download-petems",
+      "source": "./",
+      "description": "Download and verify a Three UK bill PDF via Chrome DevTools"
     }
   ]
 }
