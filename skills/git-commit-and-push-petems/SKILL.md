@@ -89,9 +89,9 @@ When there is no issue number, use a short slug, e.g. `feat/add-oauth-login`, `f
 
 Analyze all staged changes (both previously staged and newly added) and draft a commit message following **Conventional Commits** format with petems preferences applied.
 
-> The base format comes from the [Conventional Commits spec](references/conventional-commits-v1.md),
-> with type prefixes drawn from the [Karma convention](references/karma-commit-message-convention.md).
-> Where this skill diverges from those specs, see [petems preferences](references/petems-preferences.md).
+> The base format comes from the Conventional Commits spec (`${CLAUDE_SKILL_DIR}/references/conventional-commits-v1.md`),
+> with type prefixes drawn from the Karma convention (`${CLAUDE_SKILL_DIR}/references/karma-commit-message-convention.md`).
+> Where this skill diverges from those specs, see petems preferences (`${CLAUDE_SKILL_DIR}/references/petems-preferences.md`).
 
 #### Title line
 
