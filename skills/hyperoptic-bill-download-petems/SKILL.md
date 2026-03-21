@@ -34,7 +34,7 @@ This skill automates downloading bill PDFs from the Hyperoptic customer portal u
 
 - **Chrome DevTools MCP server** configured and running (`npx @anthropic-ai/chrome-devtools-mcp@latest`)
 - The MCP server registered in Claude Code settings under `mcpServers`
-- If MCP tools are unavailable, stop and tell the user to set up Chrome DevTools MCP first
+- If MCP tools are unavailable, stop and ask the user to set up Chrome DevTools MCP first
 - **Stale browser lock**: If a tool call fails with "The browser is already running",
   check for a stale lock file and orphaned Chrome process using these commands:
 
