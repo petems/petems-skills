@@ -88,8 +88,9 @@ Confirm both parameters with the user before proceeding.
 
 1. Find the "Download Bill" button in the snapshot and click it.
 2. Use `list_network_requests` with `resourceTypes: ["fetch", "xhr", "document", "other", "media"]` to find the PDF request. Look for a request URL containing `/pdf` or with a content-type of `application/pdf`.
-3. Use `get_network_request` with `responseFilePath: "/tmp/three_bill_temp.pdf"` to save the PDF to disk.
-4. If no PDF network request is detected:
+3. Extract the `reqid` from the matching request in the `list_network_requests` result.
+4. Use `get_network_request` with that `reqid` and `responseFilePath: "/tmp/three_bill_temp.pdf"` to save the PDF to disk.
+5. If no PDF network request is detected:
    - Wait 3 seconds and re-check `list_network_requests`. Retry up to 3 times.
    - **Fallback 1**: Use `evaluate_script` to find `<a>` tags with `.pdf` hrefs or a `download` attribute
      and extract the URL. Then navigate the browser to that URL (via `navigate_page`) so the browser
