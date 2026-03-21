@@ -18,6 +18,11 @@
       "description": "Set up prek git hooks with sensible defaults and language-specific linters"
     },
     {
+      "name": "hyperoptic-bill-download-petems",
+      "source": "./",
+      "description": "Download and verify Hyperoptic broadband bill PDFs via Chrome DevTools browser automation"
+    },
+    {
       "name": "three-phone-bill-download-petems",
       "source": "./",
       "description": "Download and verify a Three UK bill PDF via Chrome DevTools"
