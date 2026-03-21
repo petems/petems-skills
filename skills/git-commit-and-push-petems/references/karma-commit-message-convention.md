@@ -8,7 +8,7 @@ The Karma runner project defined one of the earliest widely-adopted commit messa
 
 ## Commit Message Format
 
-```
+```text
 <type>(<scope>): <subject>
 
 <body>
@@ -56,7 +56,7 @@ The scope narrows what part of the codebase is affected. Examples from Karma: `i
 
 ## Example
 
-```
+```text
 fix(middleware): ensure Range headers adhere more closely to RFC 2616
 
 Add one new dependency to ensure Range headers are correctly parsed.

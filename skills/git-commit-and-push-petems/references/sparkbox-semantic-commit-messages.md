@@ -8,7 +8,7 @@ This Sparkbox article advocates for prefixing every commit message with a semant
 
 ## Commit Message Format
 
-```
+```text
 <type>(<scope>): <subject>
 
 <body>

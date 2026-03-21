@@ -8,7 +8,7 @@ Conventional Commits is a formal specification for structuring commit messages i
 
 ## Commit Message Format
 
-```
+```text
 <type>[optional scope]: <description>
 
 [optional body]
