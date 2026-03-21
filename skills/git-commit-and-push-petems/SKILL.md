@@ -54,10 +54,36 @@ Run the following bash commands in parallel to understand the current state:
 Compare the current branch against the detected trunk branch.
 
 - **If on the detected trunk branch**: you MUST create a feature branch before committing.
-  - Derive the branch name from the planned commit type and a short slug of the description, e.g. `feat/add-oauth-login`, `fix/null-pointer-in-parser`, `refactor/extract-auth-middleware`.
+  - Derive the branch name using the naming convention below.
   - Run `git checkout -b <branch-name>`.
   - Inform the user: "Created branch `<branch-name>` to avoid committing directly to `<trunk>`."
 - **If already on a feature branch**: proceed to the next step.
+
+#### Branch naming convention
+
+When creating a new branch, use the following pattern:
+
+```text
+<type>/#<issueNumber>-<alias>
+  |         |           |
+  |         |           +---> Summary in kebab-case.
+  |         +--------------> Reference to the issue/ticket.
+  +------------------------> Type: feat, fix, docs, style, refactor, test, or chore.
+```
+
+When there is no issue number, use a short slug, e.g. `feat/add-oauth-login`, `fix/null-pointer-in-parser`, `refactor/extract-auth-middleware`.
+
+| Prefix               | Purpose                                      |
+|----------------------|----------------------------------------------|
+| `feat` or `feature` | New feature                                  |
+| `fix`                | Bug fix                                      |
+| `docs`               | Documentation only                           |
+| `style`              | Formatting, missing semicolons, etc.         |
+| `refactor`           | Code change that neither fixes nor adds      |
+| `test`               | Adding or updating tests                     |
+| `chore`              | Maintenance (deps, CI, build, etc.)          |
+
+> Reference: <https://gist.github.com/seunggabi/87f8c722d35cd07deb3f649d45a31082>
 
 ### 3. Draft the commit message
 
@@ -133,32 +159,6 @@ If the user asked to push:
 - Otherwise: `git push`
 - Report the result to the user.
 - If a new feature branch was created in Step 2, suggest the user create a pull request (but do NOT create one automatically).
-
-### 5. Semantic Branch Names
-
-When creating a new branch, use the following naming convention:
-
-```
-<type>/#<issueNumber>-<alias>
-  |         |           |
-  |         |           +---> Summary in kebab-case.
-  |         +--------------> Reference to the issue/ticket.
-  +------------------------> Type: feat, fix, docs, style, refactor, test, or chore.
-```
-
-#### Branch type prefixes
-
-| Prefix                | Purpose                                      |
-|-----------------------|----------------------------------------------|
-| `feat` or `feature`  | New feature                                  |
-| `fix`                 | Bug fix                                      |
-| `docs`                | Documentation only                           |
-| `style`               | Formatting, missing semicolons, etc.         |
-| `refactor`            | Code change that neither fixes nor adds      |
-| `test`                | Adding or updating tests                     |
-| `chore`               | Maintenance (deps, CI, build, etc.)          |
-
-> Reference: <https://gist.github.com/seunggabi/87f8c722d35cd07deb3f649d45a31082>
 
 ### 6. If pre-commit hook fails
 
