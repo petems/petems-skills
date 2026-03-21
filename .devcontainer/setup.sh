@@ -30,7 +30,7 @@ fi
 
 # Install agent-reviews globally
 echo "📦 Installing agent-reviews..."
-npm install -g agent-reviews
+npm install -g agent-reviews@1.0.1
 
 # Add agent-reviews skill (unattended mode)
 echo "🔧 Adding agent-reviews skill..."
@@ -56,7 +56,7 @@ rm -f /tmp/prek-installer.sh
 
 # Install markdownlint-cli
 echo "📝 Installing markdownlint-cli..."
-npm install -g markdownlint-cli
+npm install -g markdownlint-cli@0.48.0
 
 # Initialize prek hooks if prek.toml exists
 if [ -f "prek.toml" ]; then
