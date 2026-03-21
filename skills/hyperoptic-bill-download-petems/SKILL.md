@@ -36,9 +36,18 @@ This skill automates downloading bill PDFs from the Hyperoptic customer portal u
 - The MCP server registered in Claude Code settings under `mcpServers`
 - If MCP tools are unavailable, stop and tell the user to set up Chrome DevTools MCP first
 - **Stale browser lock**: If a tool call fails with "The browser is already running",
-  check for a stale lock at `~/.cache/chrome-devtools-mcp/chrome-profile/SingletonLock`.
-  Read the symlink target to get the PID, verify whether it is still running,
-  and kill it if it is an orphaned MCP Chrome process (not the user's regular Chrome).
+  check for a stale lock file and orphaned Chrome process using these commands:
+
+  ```bash
+  # Check for stale lock
+  ls -la ~/.cache/chrome-devtools-mcp/chrome-profile/SingletonLock
+
+  # Find the PID from the symlink target (e.g. HOSTNAME-PID)
+  readlink ~/.cache/chrome-devtools-mcp/chrome-profile/SingletonLock
+
+  # If the process is an old MCP Chrome (not regular Chrome), kill it
+  kill <PID>
+  ```
 
 ## Steps
 
@@ -108,7 +117,7 @@ The PDF is rendered inside the dialog via a `blob:` URL. Use `evaluate_script` t
    }
    ```
 
-2. Wait 2 seconds, then verify the file exists in `~/Downloads/<FILENAME>.pdf` using Bash.
+2. Poll for up to 30 seconds to verify the file exists in `~/Downloads/<FILENAME>.pdf` using Bash. A loop with a short sleep can be used to check for the file.
 
 **Why this approach?** The `get_network_request` tool with `responseFilePath` often writes 0-byte files for PDF responses that have already been consumed by Chrome's PDF viewer. The blob URL download is reliable because the blob remains in memory.
 
@@ -127,6 +136,7 @@ The PDF is rendered inside the dialog via a `blob:` URL. Use `evaluate_script` t
 2. Move from `~/Downloads/` to the save location:
 
    ```bash
+   mkdir -p "<SAVE_LOCATION>"
    mv ~/Downloads/<FILENAME>.pdf "<SAVE_LOCATION>/Hyperoptic_Bill_<Month>_<Year>_GBP<Amount>.pdf"
    ```
 
