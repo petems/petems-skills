@@ -1,14 +1,18 @@
 ---
 name: hyperoptic-bill-download-petems
-description: Download and verify a Hyperoptic bill PDF via Chrome DevTools
+description: >-
+  Download and verify Hyperoptic broadband bill PDFs via Chrome DevTools
+  browser automation. Use this skill whenever the user mentions Hyperoptic
+  bills, broadband invoices, internet bill downloads, or wants to
+  grab/fetch/save a bill from their Hyperoptic account. Also trigger when
+  the user asks to download bills for expense tracking, filing, or
+  record-keeping from Hyperoptic.
 license: MIT
 allowed-tools:
   - mcp__chrome-devtools__navigate_page
   - mcp__chrome-devtools__take_snapshot
   - mcp__chrome-devtools__take_screenshot
   - mcp__chrome-devtools__click
-  - mcp__chrome-devtools__fill
-  - mcp__chrome-devtools__type_text
   - mcp__chrome-devtools__press_key
   - mcp__chrome-devtools__wait_for
   - mcp__chrome-devtools__list_network_requests
@@ -24,128 +28,142 @@ allowed-tools:
 
 # Download a Hyperoptic bill PDF
 
-When the user asks to download a bill from Hyperoptic, follow these steps. This skill uses Chrome DevTools MCP to navigate the Hyperoptic website, locate the bill, download the PDF, rename it with a descriptive filename, and verify its contents.
+This skill automates downloading bill PDFs from the Hyperoptic customer portal using Chrome DevTools MCP for browser automation. It navigates the site, locates the target bill, downloads the PDF, renames it descriptively, and verifies the contents.
 
 ## Prerequisites
 
-This skill requires the **Chrome DevTools MCP server** to be configured and running. The MCP server provides browser automation tools (navigate, click, fill, network interception, etc.).
-
-- Install: `npx @anthropic-ai/chrome-devtools-mcp@latest` (or see the package's README for setup)
-- The MCP server must be registered in your Claude Code settings under `mcpServers`
-- Chrome (or Chromium) must be running with remote debugging enabled
-- **poppler** must be installed for PDF verification (`brew install poppler` on macOS, `apt-get install poppler-utils` on Linux). This provides `pdftotext` used to verify the downloaded bill.
-
-If any of the `mcp__chrome-devtools__*` tools are unavailable when this skill runs, stop and tell the user to set up the Chrome DevTools MCP server first.
+- **Chrome DevTools MCP server** configured and running (`npx @anthropic-ai/chrome-devtools-mcp@latest`)
+- The MCP server registered in Claude Code settings under `mcpServers`
+- If MCP tools are unavailable, stop and tell the user to set up Chrome DevTools MCP first
+- **Stale browser lock**: If a tool call fails with "The browser is already running",
+  check for a stale lock at `~/.cache/chrome-devtools-mcp/chrome-profile/SingletonLock`.
+  Read the symlink target to get the PID, verify whether it is still running,
+  and kill it if it is an orphaned MCP Chrome process (not the user's regular Chrome).
 
 ## Steps
 
 ### 1. Parse user request
 
-Determine two things from the user's message:
+Determine:
 
-- **Target month**: Which bill to download. Default to the latest (most recent) bill if not specified.
-- **Save location**: Where to save the PDF. Default to `~/Desktop/` if not specified.
+- **Target month(s)**: Which bill(s) to download. Default to the latest if not specified. Multiple months are supported (process them one at a time).
+- **Save location**: Where to save the PDF(s). Default to `~/Desktop/` if not specified.
 
-**Billing cycle note**: Hyperoptic bills are typically generated monthly.
-Check today's date before proceeding.
-If the user asks for the current month's bill and it's early in the month (before the 5th), alert them:
-"The current month's bill may not be available yet.
-Hyperoptic typically generates new bills at the start of each month.
-I will look for last month's bill instead."
-Then default to the previous month.
+**Billing cycle note**: Hyperoptic generates bills around the 9th of each month. If the user asks for the current month's bill and it is early in the month (before the 10th), warn them it may not be available yet and offer to download the previous month's bill instead.
 
-Confirm both parameters with the user before proceeding.
+Confirm parameters with the user before proceeding.
 
 ### 2. Navigate to Hyperoptic and handle login
 
-1. Navigate to `https://account.hyperoptic.com/`. This will redirect to the account dashboard if already logged in, or show the login form if not.
+1. Navigate to `https://account.hyperoptic.com/`. This redirects to the dashboard if logged in, or shows the Keycloak login form if not.
 2. Take a snapshot to assess the page state.
-3. Check the snapshot for cookie consent overlays (look for "Accept all", "Accept cookies", or similar buttons). If found, click the accept/dismiss button. For any other popups or overlays, try pressing Escape to dismiss them.
-4. Check for login indicators (account name visible, "Dashboard", or URL contains `/account` or `/dashboard`).
-5. If already logged in, proceed to Step 3.
-6. If not logged in (login form visible, or email/password fields present):
+3. **Cookie consent**: Look for an "Accept" button in the snapshot. If found, click it. For other popups, press Escape.
+4. **Check login state**: If the snapshot shows "Dashboard", an account name, or the URL contains `/account`, the user is logged in. Proceed to Step 3.
+5. **If not logged in**:
    - Tell the user: "Please log in to your Hyperoptic account in the Chrome browser window. I will wait for you to complete login."
-   - Use `wait_for` with a generous timeout (120000ms) to detect login completion. Look for text such as "Dashboard", "Account", "My bills", or "Welcome".
+   - Use `wait_for` with timeout 120000ms, looking for text: `["Dashboard", "Account", "My bills", "Welcome", "Bills"]`.
    - Once login is detected, take a fresh snapshot and continue.
-7. Do NOT enter credentials on behalf of the user. Never pass credentials through the skill.
+6. Never enter credentials on behalf of the user.
 
 ### 3. Navigate to bills page
 
-1. Look for a navigation link or menu item related to bills, billing, or invoices. Common text includes "Bills", "Billing", "Invoices", or "My bills".
-2. Click on the bills/billing navigation item to navigate to the bills page.
-3. Wait for the bills list to load (use `wait_for` looking for "Download", "View", or bill date text).
-4. Take a snapshot to see the available bills.
+Navigate directly to `https://account.hyperoptic.com/bills-and-payments` (sidebar nav links may be blocked by overlays, so always use direct URL navigation).
+
+Take a snapshot. The page shows:
+
+- An **account summary** section with the current invoice amount and dates
+- A **year selector** dropdown (defaults to current year)
+- A list of **month names** (January through December) as clickable text
+
+Note the current invoice amount from the account summary (e.g. "£53.00" next to "Current invoice"). This will be used for the filename of the latest bill.
 
 ### 4. Select the target bill
 
-1. The bills page typically shows a list of available bills with dates and amounts.
-2. Examine the snapshot to identify the bill list structure. Look for:
-   - Bill dates (month and year)
-   - Bill amounts
-   - Download or View buttons/links
-3. If the user requested a specific month:
-   - Locate the bill matching that month in the list.
-   - If the target month is not found, list the available months and ask the user to pick one.
-4. If the user requested "latest" (the default), select the most recent bill (usually at the top of the list).
-5. Extract the bill date (month and year) and total amount from the page text. These will be used for the filename.
+**Page structure**: The bills page lists all 12 months. Clicking a month name opens a dialog with the PDF for that month's bill. Months without a bill may show an empty dialog or no response.
+
+1. If the user wants a bill from a **different year**, change the year selector first.
+2. **Identify the target month** in the snapshot and click its text element.
+3. A dialog will open with the title "Your bill - (date)" and an embedded PDF viewer.
+4. Take a snapshot to confirm the dialog opened. From the dialog, note:
+   - The **bill date** from the dialog title (e.g. "Your bill - 9 Mar 2026")
+   - The **blob URL** from the iframe's `url` attribute (e.g. `blob:https://account.hyperoptic.com/<uuid>`)
+   - The **invoice number** from the dialog description (e.g. "Invoice-74654979")
 
 ### 5. Download the PDF
 
-1. Find the "Download" or "View Bill" button/link for the selected bill in the snapshot and click it.
-2. Use `list_network_requests` with `resourceTypes: ["fetch", "xhr", "document", "other"]` to find the PDF request. Look for a request URL containing `/pdf`, `/invoice`, `/bill`, or with a content-type of `application/pdf`.
-3. Use `get_network_request` with `responseFilePath: "/tmp/hyperoptic_bill_temp.pdf"` to save the PDF to disk.
-4. If no PDF network request is detected:
-   - Wait 3 seconds and re-check `list_network_requests`. Retry up to 3 times.
-   - **Fallback 1**: Use `evaluate_script` to find `<a>` tags with `.pdf` hrefs, `download` attribute, or containing "bill" or "invoice" in the URL.
-     Extract the URL and use `get_network_request` with `responseFilePath: "/tmp/hyperoptic_bill_temp.pdf"` to save
-     the PDF via the browser (which carries session cookies).
-   - **Fallback 2**: If a new tab/window opened with the PDF, use `list_pages` to find the PDF page, `select_page` to switch to it, then retry `list_network_requests`.
-   - **Fallback 3 (last resort)**: If browser-context retrieval also fails, use Bash with `curl` to download the URL. Note that `curl` does not share the browser's session cookies, so this will fail for session-protected endpoints.
+The PDF is rendered inside the dialog via a `blob:` URL. Use `evaluate_script` to trigger a browser download from this blob URL.
+
+1. Use `evaluate_script` to create a temporary anchor element that downloads the blob:
+
+   ```javascript
+   async () => {
+     const blobUrl = '<BLOB_URL_FROM_SNAPSHOT>';
+     const a = document.createElement('a');
+     a.href = blobUrl;
+     a.download = '<FILENAME>.pdf';
+     document.body.appendChild(a);
+     a.click();
+     document.body.removeChild(a);
+     return { triggered: true };
+   }
+   ```
+
+2. Wait 2 seconds, then verify the file exists in `~/Downloads/<FILENAME>.pdf` using Bash.
+
+**Why this approach?** The `get_network_request` tool with `responseFilePath` often writes 0-byte files for PDF responses that have already been consumed by Chrome's PDF viewer. The blob URL download is reliable because the blob remains in memory.
+
+**Fallback**: If the blob URL download fails:
+
+1. Use `list_network_requests` with `resourceTypes: ["fetch", "xhr", "document", "other"]` to find the billing API request
+   (URL pattern: `/billing/INVOICE_NUMBER`).
+2. Use `get_network_request` with an **absolute** `responseFilePath`.
+3. Verify the file is non-zero before proceeding.
 
 ### 6. Rename and move the file
 
-1. Construct a descriptive filename using the bill date and amount from Step 4:
-   - Format: `Hyperoptic_Bill_<Month>_<Year>_GBP<Amount>.pdf`
-   - Example: `Hyperoptic_Bill_March_2026_GBP39.99.pdf`
-   - If the amount could not be determined, omit it: `Hyperoptic_Bill_March_2026.pdf`
-2. Use Bash to move the file from the temp path to the user-confirmed final destination:
+1. Construct the filename: `Hyperoptic_Bill_<Month>_<Year>_GBP<Amount>.pdf`
+   - Example: `Hyperoptic_Bill_March_2026_GBP53.00.pdf`
+   - If the amount is unknown, omit it: `Hyperoptic_Bill_March_2026.pdf`
+2. Move from `~/Downloads/` to the save location:
 
    ```bash
-   mv /tmp/hyperoptic_bill_temp.pdf "<SAVE_LOCATION>/Hyperoptic_Bill_<Month>_<Year>_GBP<Amount>.pdf"
+   mv ~/Downloads/<FILENAME>.pdf "<SAVE_LOCATION>/Hyperoptic_Bill_<Month>_<Year>_GBP<Amount>.pdf"
    ```
 
-3. Confirm the file exists and has a non-zero size:
-
-   ```bash
-   test -s "<SAVE_LOCATION>/Hyperoptic_Bill_<Month>_<Year>_GBP<Amount>.pdf"
-   ```
+3. Verify: `test -s "<SAVE_LOCATION>/Hyperoptic_Bill_<Month>_<Year>_GBP<Amount>.pdf"`
 
 ### 7. Verify the PDF
 
-1. Use the Read tool to view the downloaded PDF (pages "1-3"). If the Read tool cannot render the PDF, fall back to extracting text with `pdftotext <file> -` via Bash.
-2. Check the following:
-   - **Month match**: The billing period text on the PDF matches the requested month.
-   - **Amount visible**: A total or payment amount is present and appears reasonable (a positive GBP value).
-   - **Valid bill indicators**: The PDF contains Hyperoptic branding, an account number or reference, and standard bill elements like VAT or itemized charges.
-3. Report a summary to the user:
+1. Use the Read tool to view the PDF (pages "1-2").
+2. Verify:
+   - **Month match**: The bill date on the PDF matches the requested month
+   - **Amount visible**: A total amount is present (positive GBP value)
+   - **Valid bill**: Hyperoptic branding, account number, and VAT/charge breakdown are present
+3. Report to the user:
    - File saved to: `<full path>`
    - Billing period: `<month/year>`
    - Amount: `<amount>`
-   - Verification: passed or failed (with details if failed)
+   - Verification: passed or failed (with details)
 
-If verification fails, warn the user with specific details about what did not match, but keep the downloaded file.
+If verification fails, warn the user but keep the file.
+
+### 8. Clean up and continue
+
+1. Close the bill dialog by clicking the "Close" button.
+2. If the user requested multiple months, repeat from Step 4 for the next month.
 
 ## Error handling
 
 | Scenario | Action |
 | -------- | ------ |
-| Not logged in | Navigate to login page, ask user to log in, wait for completion |
-| Cookie banner blocking | Click accept/dismiss, continue |
-| Bills navigation not found | Take a snapshot, search for alternative navigation (try "Account", "Billing", "Payments"), ask user for guidance if not found |
+| MCP Chrome won't start (stale lock) | Check `~/.cache/chrome-devtools-mcp/chrome-profile/SingletonLock`, kill orphaned process |
+| Not logged in | Ask user to log in, wait with 120s timeout |
+| Cookie banner blocking | Click accept/dismiss button |
+| Sidebar nav not clickable | Navigate directly to `/bills-and-payments` URL |
 | Target month not found | List available months, ask user to pick one |
-| No download button found | Take a screenshot for visual inspection, ask user for guidance |
-| PDF request not captured | Wait and retry up to 3 times, check for new tabs/windows, fall back to evaluate_script with browser retrieval, then curl as last resort |
-| Downloaded file empty or corrupt | Warn user, suggest trying the download again manually |
-| PDF verification mismatch | Warn user with details but keep the file |
-| Multiple accounts shown | List accounts, ask user which one to use |
-| Page layout unexpected | Take a screenshot, report what is visible, ask user for guidance |
+| Year not available | Check year selector options, inform user of available range |
+| Downloaded file 0 bytes | Switch to blob URL download method |
+| Blob URL download fails | Fall back to network request interception |
+| PDF verification mismatch | Warn user with details, keep the file |
+| Multiple accounts | List accounts, ask user which to use |
+| Page layout unexpected | Take a screenshot, describe what is visible, ask for guidance |
