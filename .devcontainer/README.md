@@ -16,6 +16,7 @@ The `setup.sh` script automatically installs and configures the following tools 
    - Automatically adds the `pbakaus/agent-reviews@resolve-agent-reviews` skill
 
 2. **prek**: Pre-commit hook manager
+   - Installed via official curl installer (not npm)
    - Initializes git hooks based on `prek.toml` configuration
    - Provides language-specific linting and validation
 

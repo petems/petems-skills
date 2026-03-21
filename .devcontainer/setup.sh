@@ -16,7 +16,7 @@ echo "y" | npx skills add pbakaus/agent-reviews@resolve-agent-reviews || {
 
 # Install prek (pre-commit hook manager)
 echo "🪝 Installing prek..."
-npm install -g prek
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/j178/prek/releases/download/v0.3.6/prek-installer.sh | sh
 
 # Install markdownlint-cli
 echo "📝 Installing markdownlint-cli..."
