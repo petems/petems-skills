@@ -1,0 +1,23 @@
+{
+  "skill_name": "hyperoptic-bill-download-petems",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Download my latest Hyperoptic bill",
+      "expected_output": "Downloads the most recent bill PDF to ~/Desktop/ with descriptive filename, verifies contents, reports summary",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Can you grab my February 2026 internet bill from Hyperoptic and save it to ~/Documents/bills/",
+      "expected_output": "Downloads the February 2026 bill PDF specifically, saves to ~/Documents/bills/ with correct filename, verifies month matches",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "I need to download my Hyperoptic bills for January, February, and March 2026 for my expense report",
+      "expected_output": "Downloads all three months sequentially, saves each with descriptive filenames to ~/Desktop/, verifies each one",
+      "files": []
+    }
+  ]
+}
