@@ -199,6 +199,9 @@ Not every talk fits all 8 steps neatly. Use the Story Circle as a guide, not a s
 
 After showing the slides:
 
+- Run `references/ai-slop-checklist.md` against the draft. Scan slides and speaker
+  notes for AI vocabulary clusters, inflated significance, and formatting tells.
+  Fix anything that reads robotic before asking for human feedback.
 - Ask if sections need expansion or compression
 - Check if code examples need better formatting
 - Verify the story flow makes sense
@@ -221,6 +224,7 @@ After showing the slides:
 - `references/story-circle.md` - Eight-step Story Circle framework with examples. Read this first to understand the narrative structure.
 - `references/ia-presenter-syntax.md` - Complete iA Presenter markdown syntax reference. Read this when generating slides.
 - `references/recommended-mcps.md` - Table of recommended MCP servers for research. Read during Step 2a (Tool Inventory) to check what's available and suggest additions.
+- `references/ai-slop-checklist.md` - AI writing tells checklist. Read during Step 6 (Refine and Iterate) to catch robotic phrasing in slides and speaker notes.
 
 ## Example Workflow
 
