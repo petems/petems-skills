@@ -1,0 +1,22 @@
+[
+  {"query": "download my latest hyperoptic bill to the desktop", "should_trigger": true},
+  {"query": "I need to grab my Hyperoptic broadband invoice for February, it's for an expense claim at work", "should_trigger": true},
+  {"query": "can you get all my hyperoptic bills from the last 3 months? i need them for my accountant", "should_trigger": true},
+  {"query": "fetch my internet bill from hyperoptic and save it somewhere sensible", "should_trigger": true},
+  {"query": "hyperoptic bill download please, the march one", "should_trigger": true},
+  {"query": "i want to save a copy of my hyperoptic invoice as a pdf", "should_trigger": true},
+  {"query": "grab my broadband bill from the hyperoptic portal, save to ~/Documents/bills", "should_trigger": true},
+  {"query": "download the hyperoptic bill for last month, I think it was around fifty quid", "should_trigger": true},
+  {"query": "my wife's hyperoptic account has a bill we need to download for the tax return", "should_trigger": true},
+  {"query": "can you check how much my hyperoptic bill was this month? I don't need to download it, just tell me the amount", "should_trigger": false},
+  {"query": "help me set up a direct debit for my Hyperoptic broadband", "should_trigger": false},
+  {"query": "download my Three mobile phone bill for march", "should_trigger": false},
+  {"query": "I need to download a PDF from this website: https://example.com/report.pdf", "should_trigger": false},
+  {"query": "can you help me dispute a charge on my Hyperoptic bill? The amount seems wrong", "should_trigger": false},
+  {"query": "download my BT broadband bill and save it as a PDF", "should_trigger": false},
+  {"query": "I want to cancel my Hyperoptic subscription, can you help?", "should_trigger": false},
+  {"query": "compare my Hyperoptic and Virgin Media broadband bills from the last quarter", "should_trigger": false},
+  {"query": "write a python script that logs into hyperoptic and downloads all my bills automatically", "should_trigger": false},
+  {"query": "open the hyperoptic website and check my account balance", "should_trigger": false},
+  {"query": "download my electricity bill from octopus energy", "should_trigger": false}
+]

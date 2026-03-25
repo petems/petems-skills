@@ -9,6 +9,7 @@ These are mostly just a matter of taste for me, as they're generally just slight
 | Skill                                                                                  | Description                                                               |
 |----------------------------------------------------------------------------------------|---------------------------------------------------------------------------|
 | [git-commit-and-push-petems](skills/git-commit-and-push-petems/SKILL.md)               | Commit and push with Peter's conventional commit format                   |
+| [hyperoptic-bill-download-petems](skills/hyperoptic-bill-download-petems/SKILL.md)     | Download and verify Hyperoptic broadband bill PDFs via Chrome DevTools    |
 | [prek-setup-petems](skills/prek-setup-petems/SKILL.md)                                 | Set up prek git hooks with sensible defaults and language-specific linters|
 | [three-phone-bill-download-petems](skills/three-phone-bill-download-petems/SKILL.md)   | Download and verify a Three UK bill PDF via Chrome DevTools               |
 
