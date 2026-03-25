@@ -5,7 +5,9 @@ license: MIT
 allowed-tools:
   - Bash
   - Read
+  - Write
   - WebFetch
+  - WebSearch
 ---
 
 > Based on the excellent content creation skills by Nick Nisi.
@@ -16,43 +18,126 @@ allowed-tools:
 
 Build compelling conference talk outlines and iA Presenter markdown slides using the Story Circle narrative framework, with Peter's DevOps/infra community perspective baked in.
 
+## Peter's Voice
+
+Write slides and speaker notes in a conversational, slightly informal British English tone. Think "experienced engineer chatting at a pub after the meetup" rather than "corporate keynote."
+
+- Self-deprecating humour is good. Dry wit over slapstick.
+- Default to showing real code/config, not pseudocode. DevOps audiences want to see the YAML, the Terraform, the Dockerfile.
+- Swearing: keep it PG-13 on slides, max out at Rated-R in speaker notes.
+  Occasional mild swearing or minced oaths are fine for emphasis, quoting,
+  or when the moment genuinely calls for it. Swearing gets its power from
+  its shock value, so use it sparingly and responsibly. When in doubt, ask
+  the user if the context warrants it.
+- Avoid corporate jargon ("synergies", "leverage", "paradigm shift"). Say what you mean.
+- Prefer concrete examples over abstract statements. "We cut deploy time from 45 minutes to 3" beats "we significantly improved deployment velocity."
+
 ## Process
 
 Follow these steps in order when building a conference talk:
 
 ### 1. Gather Information
 
-Ask the user for:
+Start with whatever the user gives you, even if it's just a topic and a vague idea. Ask follow-up questions to fill gaps, but don't front-load a big questionnaire. Tease out the story through conversation.
 
-- Talk title and topic
-- Target audience and their expected knowledge level
-- Main points they want to cover
-- Brain dump of everything they know about the topic
-- Problem they're solving or story they're telling
-- Any constraints (time limit, specific technologies, etc.)
+Key things to establish (over the course of conversation, not all at once):
+
+- What's the talk about and what's the story arc?
+- Who's in the room and what do they already know?
+- How long is the slot?
+- What's the one thing the audience should remember walking out?
+- Any brain dump of experiences, anecdotes, or technical details they want to include
 
 ### 2. Research the Topic
 
-Use WebFetch to gather context on the talk's theme and fill in gaps from the brain dump.
+The goal is not to become an expert, but to arm the speaker with enough context and
+supporting detail to tell a credible, grounded story. If the user already has deep
+experience with the topic, keep research light (focus on recent developments and what
+the audience might already know). If they're exploring a newer area, spend more time here.
 
-**What to research:**
+#### Step 2a -- Tool Inventory & MCP Audit
 
-- The topic itself: current state of the art, recent developments, community sentiment
-- Related talks: has someone given a similar talk recently? What angle did they take?
-- Supporting data: stats, benchmarks, release notes, or blog posts that strengthen the narrative
-- The conference or meetup (if known): what's the vibe, who's the audience, what other talks are on the schedule?
+Before doing any research, inventory what's available. Check every MCP server currently connected and every built-in tool you have access to.
 
-**How to research:**
+**Always available (built-in):**
 
-1. Start with any URLs the user provided in their brain dump
-2. Fetch relevant project pages, documentation, or blog posts for technical grounding
-3. Look for real numbers, timelines, and specifics that make the talk concrete (not hand-wavy)
+- **WebSearch** / **WebFetch** handle the majority of research needs and require no setup.
 
-The goal is not to become an expert, but to arm the speaker with enough context and supporting detail to tell a credible, grounded story.
-If the user already has deep experience with the topic, the research phase is lighter (focus on recent developments and what the audience might already know).
-If the user is exploring a newer area, spend more time here.
+**Recommended MCP servers:** Read `references/recommended-mcps.md` for a table of
+useful MCP servers for research (search engines, doc lookup, academic papers, image
+search, etc.). If any are missing and would be particularly useful for this talk's
+topic, mention them to the user as options worth adding.
 
-Share a brief summary of what you found with the user before moving to the outline. This gives them a chance to correct misunderstandings or highlight what's most relevant.
+**Workplace knowledge tools** (Confluence, Glean, Notion, Google Drive, Slack, etc.):
+These can be goldmines for work-related talks, but raise a flag before using them.
+Internal docs may contain private roadmap items, unreleased product details, or
+internal-only metrics that shouldn't appear in a public talk. Always ask the user
+before searching these, and flag anything that looks potentially sensitive.
+
+**Other connected MCPs:** Scan all other connected MCP servers. If you spot servers for YouTube, Reddit, Twitter/X, Hacker News, or any domain-specific tool relevant to the talk topic, ask the user if they'd like to include them in the research sweep.
+
+**MCP count guardrail:** If you're planning to actively use more than WebFetch,
+WebSearch, and 3 additional MCP servers during research, pause and check with the
+user. Too many tools at once gets unwieldy: responses slow down, context gets noisy,
+and it's harder to track what came from where. Ask the user to pick the 2-3 most
+relevant.
+
+**Fallback:** If no web tools are available at all, rely on training knowledge and ask the user to upload reference materials (PDFs, bookmarks, notes, etc.).
+
+#### Step 2b -- Topic Scoping & Angle Generation
+
+Generate 3-5 research angles tailored to the topic type. Examples by category:
+
+- **Technical** (e.g. DevOps): current industry state, recent tooling shifts, common pain points, compelling case studies, counter-narratives
+- **Hobby / personal** (e.g. powerlifting, gigging): recent news or moments in the space, interesting stats, cultural context, relatable analogies, "why should a tech audience care" hooks
+- **Analytical** (e.g. baseball, ergonomics): key data/studies, common misconceptions, surprising findings, practical takeaways
+
+Present the angles to the user for confirmation or adjustment before proceeding.
+
+#### Step 2c -- Broad Search Sweep
+
+For each confirmed research angle:
+
+- Run 2-3 searches varying the query framing (keyword-based via WebSearch/DuckDuckGo/Brave, semantic via Exa if available, structured via Tavily if available, academic via Paper Search if the topic warrants it)
+- **Use domain filters with WebSearch** to target specific source types:
+  - Existing talks: `allowed_domains: ["youtube.com", "speakerdeck.com", "slideshare.net"]`
+  - Community sentiment: `allowed_domains: ["news.ycombinator.com", "reddit.com", "lobste.rs"]`
+  - Conference context: search for the specific conference schedule or CFP page
+- If Context7 is available and the topic involves specific libraries or frameworks, pull current docs to verify technical claims. Audiences notice when slides say "new in v3" and v4 has been out for six months.
+- Aim for breadth: mix source types (articles, papers, blog posts, talks, data sets) and perspectives
+- Capture 5-10 promising leads per angle: URL, title, one-line note on why it looks useful
+- Use WebFetch to deep-read the most relevant 2-3 results from each angle
+
+#### Step 2d -- Deep Dives
+
+Fetch and read the most promising 5-10 sources from the sweep. For each, extract:
+
+- **Key claims with specifics** -- numbers, dates, names
+- **Surprising or counterintuitive findings**
+- **Quotable phrases or framings** worth referencing in the talk
+- **Narrative threads** that could structure sections of the talk
+- **Audience interaction hooks** -- moments that invite questions, polls, or demos
+
+#### Step 2e -- Synthesis
+
+Compile everything into `research_brief.md` with these sections:
+
+1. **Executive Summary** -- the topic landscape in 3-5 sentences
+2. **Findings by Angle** -- key takeaways grouped under each research angle from Step 2b
+3. **Hooks & Surprises** -- the 3-5 most compelling facts, stories, or stats for grabbing attention
+4. **Narrative Arc Options** -- 2-3 ways to structure the talk, each with a one-sentence rationale
+5. **Annotated Source List** -- each source with a note on what it's useful for
+6. **Gaps & Open Questions** -- things worth knowing that the research didn't surface, flagged for the user to fill in with personal experience or further digging
+
+Save the brief and present it to the user before moving to the outline. This gives them a chance to correct misunderstandings, flag what's most relevant, or say "actually, skip that angle."
+
+#### Slide imagery
+
+Source slide imagery separately during the slide-building stage (Step 5), not during
+research. Use Unsplash to find thematic images with `orientation: "landscape"` for
+widescreen slides. Always use get_photo_attribution and include the credit on a
+references slide. Only do this if the user wants images; many DevOps talks are
+code/text-heavy and that's fine.
 
 ### 3. Read the Story Circle Framework
 
@@ -82,6 +167,8 @@ Map the user's content to these steps. Show this outline to the user and refine 
 
 Read `references/ia-presenter-syntax.md` for markdown formatting rules.
 
+Save the slide deck to `<talk-title-slug>.md` in the current directory. Ask the user if they want it somewhere else.
+
 Create slides that:
 
 - Use `---` to separate slides
@@ -98,6 +185,15 @@ Structure the slide deck:
 - One or more slides per Story Circle step
 - Code examples broken across multiple slides for readability
 - Closing slide with contact info and resources
+
+### Adapting the Framework
+
+Not every talk fits all 8 steps neatly. Use the Story Circle as a guide, not a straitjacket.
+
+- **Lightning talks (5-10 min):** Compress to Problem, Exploration, Solution, Takeaway.
+- **Demo-heavy talks:** The "Experimentation" and "Solution" steps might be live demos with minimal slides. Focus slides on setup/context and wrap-up.
+- **"State of the ecosystem" surveys:** The "journey" is the audience's journey through the landscape rather than a single problem/solution arc.
+- **Panel prep:** Structure talking points around the Story Circle but expect to jump between steps based on questions.
 
 ### 6. Refine and Iterate
 
@@ -124,6 +220,7 @@ After showing the slides:
 
 - `references/story-circle.md` - Eight-step Story Circle framework with examples. Read this first to understand the narrative structure.
 - `references/ia-presenter-syntax.md` - Complete iA Presenter markdown syntax reference. Read this when generating slides.
+- `references/recommended-mcps.md` - Table of recommended MCP servers for research. Read during Step 2a (Tool Inventory) to check what's available and suggest additions.
 
 ## Example Workflow
 

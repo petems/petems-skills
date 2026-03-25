@@ -251,13 +251,16 @@ function example() {
 ```
 ````
 
+The example above shows a complete slide with headers, tabbed content, lists,
+and a code block. The `---` before `## Next Slide` starts a new slide:
+
+````markdown
 ---
 
 ## Next Slide
 
 ⇥More content here...
-
-```markdown
+````
 
 ## Best Practices
 
@@ -266,4 +269,3 @@ function example() {
 3. Use comments for speaker notes
 4. Break complex code across multiple slides
 5. Test that all visible content is properly tabbed
-```

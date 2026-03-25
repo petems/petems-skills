@@ -11,6 +11,10 @@ skills/<name>/SKILL.md           One directory per skill
 .claude-plugin/                  Plugin manifest + marketplace catalog
 ```
 
+## Tooling
+
+- This repo uses **prek** for pre-commit hooks (`prek.toml` at repo root).
+
 ## Rules
 
 - Each skill lives in `skills/<name>/SKILL.md` with YAML frontmatter (name, description, license, allowed-tools).
