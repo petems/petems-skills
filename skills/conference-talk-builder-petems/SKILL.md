@@ -165,7 +165,7 @@ Map the user's content to these steps. Show this outline to the user and refine 
 
 ### 5. Generate MARP Slides
 
-Read `references/marp-syntax.md` for Markdown formatting rules.
+Read `references/marp-syntax.md` for Markdown formatting rules and `references/slide-design-golden-rules.md` for visual design principles (hierarchy, contrast, typography, colour).
 
 Save the slide deck to `<talk-title-slug>.md` in the current directory. Ask the user if they want it somewhere else.
 
@@ -232,6 +232,7 @@ After showing the slides:
 
 - `references/story-circle.md` - Eight-step Story Circle framework with examples. Read this first to understand the narrative structure.
 - `references/marp-syntax.md` - Complete MARP Markdown syntax reference. Read this when generating slides.
+- `references/slide-design-golden-rules.md` - Visual design principles (hierarchy, contrast, typography, colour, whitespace). Read alongside `marp-syntax.md` when building slides to make them look good, not just syntactically correct.
 - `references/recommended-mcps.md` - Table of recommended MCP servers for research. Read during Step 2a (Tool Inventory) to check what's available and suggest additions.
 - `references/ai-slop-checklist.md` - AI writing tells checklist. Read during Step 6 (Refine and Iterate) to catch robotic phrasing in slides and speaker notes.
 
