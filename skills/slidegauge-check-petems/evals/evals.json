@@ -1,0 +1,43 @@
+{
+  "skill_name": "slidegauge-check-petems",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Check the quality of my Marp presentation slides.md",
+      "expected_output": "Runs slidegauge via uvx with --text flag, reports overall score, passing rate, and identifies failing slides with specific issues",
+      "files": [],
+      "assertions": [
+        {"id": "used_slidegauge", "text": "Ran the slidegauge CLI tool (not just manual review)"},
+        {"id": "reported_overall_score", "text": "Reported an overall/average score for the presentation"},
+        {"id": "identified_failing_slides", "text": "Identified specific slides that are failing (score < 70)"},
+        {"id": "named_specific_issues", "text": "Named specific rule violations (e.g. bullets/too_many, title/too_long)"}
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "My presentation has some slides scoring below 70, can you fix them?",
+      "expected_output": "Runs slidegauge with --json to get detailed diagnostics, identifies slides below threshold, applies appropriate fixes (splitting, condensing, shortening titles), then re-runs to validate improvements",
+      "files": [],
+      "assertions": [
+        {"id": "ran_analysis_first", "text": "Ran slidegauge analysis before making changes"},
+        {"id": "produced_fixed_file", "text": "Produced a modified presentation file"},
+        {"id": "revalidated_after_fixes", "text": "Re-ran slidegauge after making fixes to verify improvement"},
+        {"id": "all_slides_passing", "text": "All slides in the fixed version score >= 70"},
+        {"id": "preserved_content", "text": "Did not remove or significantly alter the technical content"}
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Analyze my-talk.md with SlideGauge and fix any slides that have too many bullets",
+      "expected_output": "Runs slidegauge analysis, filters for bullets/too_many issues, splits or consolidates affected slides using Edit tool, re-validates with slidegauge",
+      "files": [],
+      "assertions": [
+        {"id": "used_slidegauge", "text": "Ran slidegauge to identify bullet issues"},
+        {"id": "fixed_bullet_counts", "text": "Reduced bullet count to <= 6 per slide"},
+        {"id": "used_split_or_consolidate", "text": "Used split or consolidate strategy rather than deleting content"},
+        {"id": "revalidated", "text": "Re-ran slidegauge after fixes to confirm resolution"},
+        {"id": "only_fixed_bullets", "text": "Focused on bullet issues, did not make unrelated changes"}
+      ]
+    }
+  ]
+}

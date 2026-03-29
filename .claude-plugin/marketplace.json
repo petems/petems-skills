@@ -26,6 +26,11 @@
       "name": "three-phone-bill-download-petems",
       "source": "./",
       "description": "Download and verify a Three UK bill PDF via Chrome DevTools"
+    },
+    {
+      "name": "slidegauge-check-petems",
+      "source": "./",
+      "description": "Analyze and improve Marp markdown presentations using SlideGauge quality checks"
     }
   ]
 }
