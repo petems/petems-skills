@@ -5,7 +5,7 @@ Check whether any of the following are connected. If any are missing, mention th
 | MCP Server | What it's good for | Link / Install |
 | --- | --- | --- |
 | **DuckDuckGo** | Free general web search, no API key needed, good fallback/complement to built-in search | `nickclyde/duckduckgo-mcp-server` -- `uvx duckduckgo-mcp-server` |
-| **Brave Search** (`@modelcontextprotocol/server-brave-search`) | General-purpose search with advanced operators (`site:`, `filetype:`, date ranges). 2,000 free queries/month | npmjs `@anthropic/server-brave-search` |
+| **Brave Search** (`@brave/brave-search-mcp-server`) | General-purpose search with advanced operators (`site:`, `filetype:`, date ranges). 2,000 free queries/month | npmjs `@brave/brave-search-mcp-server` |
 | **Tavily** (`tavily-mcp` or remote at `https://mcp.tavily.com/mcp/`) | Strong on technical docs, returns structured/summarised results. 1,000 free queries/month | |
 | **Exa** (`exa-mcp-server`) | Semantic/neural search, great for thematic queries like "find articles about why X is like Y" rather than keyword matches | |
 | **Context7** (`@upstash/context7-mcp`) | Up-to-date library/framework documentation. Invaluable if the talk involves specific tech (e.g. "what changed in Next.js 15"). Free tier available | `npx -y @upstash/context7-mcp` or remote: `https://mcp.context7.com/mcp` |
