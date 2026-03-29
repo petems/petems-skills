@@ -176,7 +176,7 @@ Use HTML comments anywhere in a slide:
 ```
 
 This is the biggest syntax difference from iA Presenter, which used a tab/no-tab
-system. In MARP, everything visible on the slide is normal markdown. Speaker
+system. In MARP, everything visible on the slide is normal Markdown. Speaker
 notes live in HTML comments.
 
 ## Formatting Rules
@@ -204,7 +204,7 @@ resource "aws_instance" "web" {
 
 ## Images
 
-Standard markdown images:
+Standard Markdown images:
 
 ```markdown
 ![Architecture diagram](./images/architecture.png)
@@ -218,7 +218,7 @@ For background images, use MARP's image directive:
 
 ## Tables
 
-Standard markdown tables:
+Standard Markdown tables:
 
 ```markdown
 | Tool    | Speed  | Complexity |

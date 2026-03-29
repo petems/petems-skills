@@ -16,7 +16,7 @@ allowed-tools:
 
 # Peter's Conference Talk Builder
 
-Build compelling conference talk outlines and MARP markdown slides using the Story Circle narrative framework, with Peter's DevOps/infra community perspective baked in.
+Build compelling conference talk outlines and MARP Markdown slides using the Story Circle narrative framework, with Peter's DevOps/infra community perspective baked in.
 
 ## Peter's Voice
 
@@ -165,7 +165,7 @@ Map the user's content to these steps. Show this outline to the user and refine 
 
 ### 5. Generate MARP Slides
 
-Read `references/marp-syntax.md` for markdown formatting rules.
+Read `references/marp-syntax.md` for Markdown formatting rules.
 
 Save the slide deck to `<talk-title-slug>.md` in the current directory. Ask the user if they want it somewhere else.
 
@@ -231,7 +231,7 @@ After showing the slides:
 ### References
 
 - `references/story-circle.md` - Eight-step Story Circle framework with examples. Read this first to understand the narrative structure.
-- `references/marp-syntax.md` - Complete MARP markdown syntax reference. Read this when generating slides.
+- `references/marp-syntax.md` - Complete MARP Markdown syntax reference. Read this when generating slides.
 - `references/recommended-mcps.md` - Table of recommended MCP servers for research. Read during Step 2a (Tool Inventory) to check what's available and suggest additions.
 - `references/ai-slop-checklist.md` - AI writing tells checklist. Read during Step 6 (Refine and Iterate) to catch robotic phrasing in slides and speaker notes.
 
@@ -242,7 +242,7 @@ User: "I want to create a talk about migrating from Puppet to Ansible"
 1. Gather their experience, main points, and target audience
 2. Research the topic: fetch Puppet's recent release notes and deprecation timeline, check the Ansible migration guide, look for similar talks at recent ConfigMgmtCamp or PuppetConf events
 3. Share research summary with user for validation
-4. Read `story-circle.md`
+4. Read `references/story-circle.md`
 5. Map their content:
    - Introduction: Current Puppet-managed infrastructure, been running it for years
    - Problem: Puppet module ecosystem shrinking, team struggling to hire Puppet devs
@@ -252,7 +252,7 @@ User: "I want to create a talk about migrating from Puppet to Ansible"
    - Challenges: Hiera data translation, module dependency untangling
    - Apply Knowledge: Full infrastructure migration over six months
    - Results: Smaller codebase, easier onboarding, lessons learned about config management assumptions
-6. Read `marp-syntax.md`
-7. Generate MARP markdown slides with proper formatting
+6. Read `references/marp-syntax.md`
+7. Generate MARP Markdown slides with proper formatting
 8. Export to HTML and PPTX via marp-cli
 9. Iterate based on feedback
