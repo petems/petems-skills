@@ -76,11 +76,11 @@ before searching these, and flag anything that looks potentially sensitive.
 
 **Other connected MCPs:** Scan all other connected MCP servers. If you spot servers for YouTube, Reddit, Twitter/X, Hacker News, or any domain-specific tool relevant to the talk topic, ask the user if they'd like to include them in the research sweep.
 
-**MCP count guardrail:** If you're planning to actively use more than WebFetch,
-WebSearch, and 3 additional MCP servers during research, pause and check with the
+**MCP count guardrail:** Limit active research to 5 MCP servers total (including
+WebFetch and WebSearch). If you're about to exceed that, pause and check with the
 user. Too many tools at once gets unwieldy: responses slow down, context gets noisy,
 and it's harder to track what came from where. Ask the user to pick the 2-3 most
-relevant.
+relevant beyond the built-in pair.
 
 **Fallback:** If no web tools are available at all, rely on training knowledge and ask the user to upload reference materials (PDFs, bookmarks, notes, etc.).
 
@@ -208,7 +208,7 @@ Not every talk fits all 8 steps neatly. Use the Story Circle as a guide, not a s
 
 After showing the slides:
 
-- Run `references/ai-slop-checklist.md` against the draft. Scan slides and speaker
+- Check the draft against `references/ai-slop-checklist.md`. Scan slides and speaker
   notes for AI vocabulary clusters, inflated significance, and formatting tells.
   Fix anything that reads robotic before asking for human feedback.
 - Ask if sections need expansion or compression
