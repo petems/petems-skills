@@ -1,6 +1,6 @@
 ---
 name: conference-talk-builder-petems
-description: Build conference talk outlines and iA Presenter slides using the Story Circle framework, tuned to Peter's DevOps/infra community voice. Use when the user wants to structure a tech talk, create presentation slides, or needs help organising talk ideas.
+description: Build conference talk outlines and MARP slides using the Story Circle framework, tuned to Peter's DevOps/infra community voice. Use when the user wants to structure a tech talk, create presentation slides, or needs help organising talk ideas.
 license: MIT
 allowed-tools:
   - Bash
@@ -16,7 +16,7 @@ allowed-tools:
 
 # Peter's Conference Talk Builder
 
-Build compelling conference talk outlines and iA Presenter markdown slides using the Story Circle narrative framework, with Peter's DevOps/infra community perspective baked in.
+Build compelling conference talk outlines and MARP markdown slides using the Story Circle narrative framework, with Peter's DevOps/infra community perspective baked in.
 
 ## Peter's Voice
 
@@ -163,28 +163,37 @@ Structure the talk using the eight Story Circle steps:
 
 Map the user's content to these steps. Show this outline to the user and refine based on feedback.
 
-### 5. Generate iA Presenter Slides
+### 5. Generate MARP Slides
 
-Read `references/ia-presenter-syntax.md` for markdown formatting rules.
+Read `references/marp-syntax.md` for markdown formatting rules.
 
 Save the slide deck to `<talk-title-slug>.md` in the current directory. Ask the user if they want it somewhere else.
 
 Create slides that:
 
+- Start with the MARP frontmatter block (`marp: true`, `theme: default`, `paginate: true`, `size: 16:9`)
+- Include the CSS `<style>` block from the syntax reference for base styles and section colour classes
 - Use `---` to separate slides
-- Add tabs before content that should be visible on slides
-- Leave speaker notes without tabs (spoken text only)
-- Include comments with `//` for reminders
+- Use `<!-- _class: lead part-NAME -->` for section dividers, mapped to Story Circle groups
+- Use `<!-- header: "**Active** > Other > Other" -->` for breadcrumb navigation
+- Use `<!-- speaker notes here -->` HTML comments for speaker notes
 - Format code blocks with proper syntax highlighting
 - Keep slides focused on one concept each
 
 Structure the slide deck:
 
-- Title slide
-- Introduction slide with your photo/bio
-- One or more slides per Story Circle step
-- Code examples broken across multiple slides for readability
-- Closing slide with contact info and resources
+- Title slide (`<!-- _class: lead title-slide -->`)
+- Questions/goals slide
+- Agenda slide with parts mapped to Story Circle groups
+- Section divider + content slides for each Story Circle step
+- Closing slide with contact info, resources, and QR code
+
+After generating the `.md` file, offer to export:
+
+```bash
+npx @marp-team/marp-cli@latest --no-stdin <talk-title-slug>.md -o <talk-title-slug>.html
+npx @marp-team/marp-cli@latest --no-stdin <talk-title-slug>.md -o <talk-title-slug>.pptx
+```
 
 ### Adapting the Framework
 
@@ -222,7 +231,7 @@ After showing the slides:
 ### References
 
 - `references/story-circle.md` - Eight-step Story Circle framework with examples. Read this first to understand the narrative structure.
-- `references/ia-presenter-syntax.md` - Complete iA Presenter markdown syntax reference. Read this when generating slides.
+- `references/marp-syntax.md` - Complete MARP markdown syntax reference. Read this when generating slides.
 - `references/recommended-mcps.md` - Table of recommended MCP servers for research. Read during Step 2a (Tool Inventory) to check what's available and suggest additions.
 - `references/ai-slop-checklist.md` - AI writing tells checklist. Read during Step 6 (Refine and Iterate) to catch robotic phrasing in slides and speaker notes.
 
@@ -243,6 +252,7 @@ User: "I want to create a talk about migrating from Puppet to Ansible"
    - Challenges: Hiera data translation, module dependency untangling
    - Apply Knowledge: Full infrastructure migration over six months
    - Results: Smaller codebase, easier onboarding, lessons learned about config management assumptions
-6. Read `ia-presenter-syntax.md`
-7. Generate markdown slides with proper formatting
-8. Iterate based on feedback
+6. Read `marp-syntax.md`
+7. Generate MARP markdown slides with proper formatting
+8. Export to HTML and PPTX via marp-cli
+9. Iterate based on feedback
