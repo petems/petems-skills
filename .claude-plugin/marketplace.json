@@ -26,6 +26,16 @@
       "name": "three-phone-bill-download-petems",
       "source": "./",
       "description": "Download and verify a Three UK bill PDF via Chrome DevTools"
+    },
+    {
+      "name": "blog-post-writer-petems",
+      "source": "./",
+      "description": "Transform brain dumps into blog posts in Peter's casual, self-deprecating British voice"
+    },
+    {
+      "name": "conference-talk-builder-petems",
+      "source": "./",
+      "description": "Build conference talk outlines and MARP slides using the Story Circle framework"
     }
   ]
 }
