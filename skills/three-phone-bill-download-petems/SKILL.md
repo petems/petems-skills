@@ -1,20 +1,17 @@
 ---
 name: three-phone-bill-download-petems
-description: Download and verify a Three UK bill PDF via Chrome DevTools
+description: Download and verify a Three UK bill PDF via Chrome DevTools, using the My3 JSON API directly (resilient to SPA UI changes)
 license: MIT
 allowed-tools:
   - mcp__chrome-devtools__navigate_page
   - mcp__chrome-devtools__take_snapshot
   - mcp__chrome-devtools__take_screenshot
   - mcp__chrome-devtools__click
-  - mcp__chrome-devtools__fill
-  - mcp__chrome-devtools__type_text
   - mcp__chrome-devtools__press_key
   - mcp__chrome-devtools__wait_for
   - mcp__chrome-devtools__list_network_requests
   - mcp__chrome-devtools__get_network_request
   - mcp__chrome-devtools__evaluate_script
-  - mcp__chrome-devtools__hover
   - mcp__chrome-devtools__new_page
   - mcp__chrome-devtools__list_pages
   - mcp__chrome-devtools__select_page
@@ -24,140 +21,253 @@ allowed-tools:
 
 # Download a Three UK bill PDF
 
-When the user asks to download a bill from Three.co.uk, follow these steps. This skill uses Chrome DevTools MCP to navigate the Three website, locate the bill, download the PDF, rename it with a descriptive filename, and verify its contents.
+When the user asks to download a bill from Three.co.uk, follow these steps.
+This skill uses Chrome DevTools MCP to log in to My3, then calls the
+underlying `/rp-server-b2c/` JSON API directly to list and download bills.
+The previous version of this skill scraped the `/account/view-bill` page;
+that flow broke when Three redesigned the portal in early 2026. The API
+flow is much less brittle: Three's React SPA changes often, the JSON
+contract does not.
+
+See `references/three-api-endpoints.md` for a frozen snapshot of the endpoints, headers, and response shapes this skill depends on.
 
 ## Prerequisites
 
-This skill requires the **Chrome DevTools MCP server** to be configured and running. The MCP server provides browser automation tools (navigate, click, fill, network interception, etc.).
+- **Chrome DevTools MCP server** configured and running (`npx @anthropic-ai/chrome-devtools-mcp@latest`)
+- The MCP server registered in Claude Code settings under `mcpServers`
+- **poppler** installed for PDF verification (`brew install poppler` on macOS, `apt-get install poppler-utils` on Linux)
+- If MCP tools are unavailable, stop and ask the user to set up Chrome DevTools MCP first
+- **Stale browser lock**: If a tool call fails with "The browser is already running",
+  check for a stale lock file and orphaned Chrome process:
 
-- Install: `npx @anthropic-ai/chrome-devtools-mcp@latest` (or see the package's README for setup)
-- The MCP server must be registered in your Claude Code settings under `mcpServers`
-- Chrome (or Chromium) must be running with remote debugging enabled
-- **poppler** must be installed for PDF verification (`brew install poppler` on macOS, `apt-get install poppler-utils` on Linux). This provides `pdftotext` used to verify the downloaded bill.
-
-If any of the `mcp__chrome-devtools__*` tools are unavailable when this skill runs, stop and tell the user to set up the Chrome DevTools MCP server first.
+  ```bash
+  ls -la ~/.cache/chrome-devtools-mcp/chrome-profile/SingletonLock
+  readlink ~/.cache/chrome-devtools-mcp/chrome-profile/SingletonLock
+  # If the PID is an old MCP Chrome (not regular Chrome), kill it
+  kill <PID>
+  ```
 
 ## Steps
 
 ### 1. Parse user request
 
-Determine two things from the user's message:
+Determine:
 
-- **Target month**: Which bill to download. Default to the latest (most recent) bill if not specified.
+- **Target month(s)**: Which bill to download. Default to the latest (most recent) bill if not specified.
 - **Save location**: Where to save the PDF. Default to `~/Desktop/` if not specified.
 
-**Billing cycle note**: Three UK bills are generated on the 23rd/24th of each month.
-The billing period runs from the 24th of one month to the 23rd of the next.
-Check today's date before proceeding.
-If today is before the 24th and the user asks for the current month's bill, alert them:
-"The current month's bill is not available yet.
-Three generates new bills after the 23rd.
-I will look for last month's bill instead."
+**Billing cycle note**: Three UK bills are generated on the 23rd/24th of
+each month. The billing period runs from the 24th of one month to the
+23rd of the next. Check today's date before proceeding. If today is
+before the 24th and the user asks for the current month's bill, alert
+them: "The current month's bill is not available yet. Three generates
+new bills after the 23rd. I will look for last month's bill instead."
 Then default to the previous month.
 
-Confirm both parameters with the user before proceeding.
+Confirm parameters with the user before proceeding.
 
 ### 2. Navigate to Three.co.uk and handle login
 
-1. Navigate to `https://www.three.co.uk/customer-login`. This will redirect to the account dashboard if already logged in, or show the login form if not.
-2. Take a snapshot to assess the page state.
-3. Check the snapshot for cookie consent overlays (look for "Accept all", "Accept cookies", or similar buttons). If found, click the accept/dismiss button. For any other popups or overlays, try pressing Escape to dismiss them.
-4. Check for login indicators (account name visible, "Good morning" greeting, or URL is `/account`).
-5. If already logged in, proceed to Step 3.
-6. If not logged in (login form visible at `auth.three.co.uk`, or email/password fields present):
+1. Navigate to `https://www.three.co.uk/customer-login`. This redirects to the account dashboard if already logged in, or shows the login form (hosted on `auth.three.co.uk`) if not.
+2. Take a snapshot.
+3. **Cookie consent**: If "Accept all" / "Accept cookies" is visible, click it. For other overlays, press Escape.
+4. **Check login state**: If the snapshot shows "Good morning", "Dashboard", or "Account Number", or the URL is `/account`, the user is logged in. Proceed to Step 3.
+5. **If not logged in**:
    - Tell the user: "Please log in to your Three account in the Chrome browser window. I will wait for you to complete login."
-   - Use `wait_for` with a generous timeout (120000ms) to detect login completion. Look for text such as "Good morning", "Dashboard", or "Account Number".
-   - Once login is detected, take a fresh snapshot and continue.
-7. Do NOT enter credentials on behalf of the user. Never pass credentials through the skill.
+   - Use `wait_for` with timeout 120000ms, looking for text such as `["Good morning", "Dashboard", "Account Number"]`.
+   - Once login is detected, take a fresh snapshot.
+6. Never enter credentials on behalf of the user.
 
-### 3. Navigate to bills page
+### 3. Resolve the customer ID
 
-1. Navigate directly to `https://www.three.co.uk/account/view-bill`. This takes you straight to the bill view with the latest bill pre-selected.
-2. Wait for the bill to load (use `wait_for` looking for "View bill" or "Download Bill").
-3. Take a snapshot to see the bill details.
+The customer ID (`cuid`) is needed for every API call. The cleanest way to get it is from the `_tms_persistUser` cookie that Three sets after login.
 
-### 4. Select the target bill
+Run via `evaluate_script`:
 
-1. The latest bill should already be displayed. Check the snapshot for the bill month shown in the month selector (a combobox).
-2. If the user requested a specific month different from what is shown, click the month dropdown and select the target month.
-   - If the target month is not found, list the available months and ask the user to pick one.
-3. If the user requested "latest" (the default), the current view is correct.
-4. Extract the bill date (month and year) and total amount (inc VAT) from the page text. These will be used for the filename.
+```javascript
+() => {
+  const raw = document.cookie.split('; ').find(c => c.startsWith('_tms_persistUser='));
+  if (!raw) return { error: 'cookie_missing' };
+  try {
+    const decoded = decodeURIComponent(raw.split('=').slice(1).join('='));
+    const parsed = JSON.parse(decoded);
+    if (!parsed.cuid) return { error: 'no_cuid_in_cookie', keys: Object.keys(parsed) };
+    return { cuid: String(parsed.cuid) };
+  } catch (e) {
+    return { error: 'cookie_parse_failed', message: String(e) };
+  }
+}
+```
+
+**Fallback** (cookie missing or unparseable): use `list_network_requests` to find the first `/care/v1/B2C/customer/<id>?` request the SPA has already made, and extract `<id>` from the URL path.
+
+### 4. Call the API (seed + list bills)
+
+Run a single `evaluate_script` that calls the seed endpoint, then the list-bills endpoint. The seed endpoint returns a `uxfauthorization` token in its response header that must be passed as the `Authorization` header on subsequent calls. The token rotates on every call, so re-read it from each response.
+
+```javascript
+async (cuid) => {
+  const base = '/rp-server-b2c';
+  // 1. Seed: get auth token + billing arrangement id
+  const seedUrl = `${base}/care/v1/B2C/customer/${cuid}?salesChannel=selfService&initId=Digital&levelOfData=owningIndividual,financialAccount`;
+  const seedRes = await fetch(seedUrl, { credentials: 'include' });
+  if (seedRes.status !== 200) {
+    const snippet = (await seedRes.text()).slice(0, 200);
+    return { error: 'seed_failed', status: seedRes.status, snippet };
+  }
+  let token = seedRes.headers.get('uxfauthorization');
+  if (!token) return { error: 'no_auth_header' };
+  const seedBody = await seedRes.json();
+  const billId = seedBody?.financialAccount?.id || seedBody?.billingArrangement?.id || cuid;
+
+  // 2. List bills
+  const listUrl = `${base}/ebill/v1/customer/${cuid}/billing-arrangement/${billId}/bill?salesChannel=selfService`;
+  const listRes = await fetch(listUrl, {
+    credentials: 'include',
+    headers: { authorization: token },
+  });
+  if (listRes.status !== 200) {
+    const snippet = (await listRes.text()).slice(0, 200);
+    return { error: 'list_failed', status: listRes.status, snippet };
+  }
+  token = listRes.headers.get('uxfauthorization') || token;
+  const listBody = await listRes.json();
+  if (!Array.isArray(listBody?.bills)) {
+    return { error: 'list_shape_changed', bodyKeys: Object.keys(listBody || {}) };
+  }
+
+  // Store rotating token on window so the next evaluate_script call can read it.
+  window.__threeAuth = token;
+  window.__threeBillId = billId;
+
+  // Normalise the bills list. `month` is 0-indexed in the API.
+  const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const bills = listBody.bills.map(b => ({
+    month: months[b.month],
+    monthIndex: b.month,
+    year: b.year,
+    billNumber: b?.data?.billNumber,
+    billAmount: b?.data?.billAmount,
+    billCloseDate: b?.data?.billCloseDate,
+  }));
+  return { billId, bills };
+}
+```
+
+Map the user's requested month and year to a `billNumber`:
+
+- If the user asked for "latest", pick the most recent entry (highest year, then highest `monthIndex`).
+- If the user asked for a named month/year, find the matching entry.
+- If no match, list the available `{month, year}` entries from the result and ask the user to pick one. Do not proceed.
+
+Capture `billAmount` for the filename in step 6.
 
 ### 5. Download the PDF
 
-1. Find the "Download Bill" button in the snapshot and click it.
-2. Use `list_network_requests` with `resourceTypes: ["fetch", "xhr", "document", "other", "media"]` to find the PDF request. Look for a request URL containing `/pdf` or with a content-type of `application/pdf`.
-3. Extract the `reqid` from the matching request in the `list_network_requests` result.
-4. Use `get_network_request` with that `reqid` and `responseFilePath: "/tmp/three_bill_temp.pdf"` to save the PDF to disk.
-5. If no PDF network request is detected:
-   - Wait 3 seconds and re-check `list_network_requests`. Retry up to 3 times.
-   - **Fallback 1**: Use `evaluate_script` to find `<a>` tags with `.pdf` hrefs or a `download` attribute
-     and extract the URL. Then navigate the browser to that URL (via `navigate_page`) so the browser
-     issues the request using its existing session cookies. Capture the resulting request with
-     `list_network_requests` to obtain its `reqid`, then call `get_network_request` with that `reqid`
-     and `responseFilePath: "/tmp/three_bill_temp.pdf"` to save the PDF to disk.
-   - **Fallback 2 (last resort)**: If browser-context retrieval also fails, use Bash with `curl` to download the URL. Note that `curl` does not share the browser's session cookies, so this will fail for session-protected endpoints.
+The PDF endpoint requires the rotating `authorization` header. Re-read
+it from `window.__threeAuth` (it was just updated by the list call).
+Fetch the PDF, base64-encode the response body, and write the encoded
+string straight to a file using `evaluate_script`'s `filePath` parameter.
+Then have Bash decode it.
+
+Call `evaluate_script` with `filePath: "/tmp/three_bill_b64.txt"` and this function (pass `cuid`, `billId`, `billNumber` as `args`):
+
+```javascript
+async (cuid, billId, billNumber) => {
+  const token = window.__threeAuth;
+  if (!token) return 'ERROR:no_token';
+  const url = `/rp-server-b2c/care/v1/customer/${cuid}/billing-arrangement/${billId}/bill/${billNumber}/pdf?salesChannel=selfService`;
+  const res = await fetch(url, {
+    credentials: 'include',
+    headers: { authorization: token },
+  });
+  if (res.status !== 200) {
+    return `ERROR:pdf_status:${res.status}`;
+  }
+  const ctype = res.headers.get('content-type') || '';
+  if (!ctype.startsWith('application/pdf')) {
+    return `ERROR:pdf_content_type:${ctype}`;
+  }
+  window.__threeAuth = res.headers.get('uxfauthorization') || token;
+  const buf = await res.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  // Base64 in chunks to avoid stack overflow on large strings.
+  let bin = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(bin);
+}
+```
+
+If the returned content starts with `ERROR:`, go to step 7 (Diagnostic capture). Otherwise decode:
+
+```bash
+base64 -d /tmp/three_bill_b64.txt > /tmp/three_bill_temp.pdf
+rm /tmp/three_bill_b64.txt
+test -s /tmp/three_bill_temp.pdf
+# Sanity-check size: a Three bill is typically 0.5–2 MB. Fewer than 100 KB is suspicious.
+[ "$(stat -f%z /tmp/three_bill_temp.pdf 2>/dev/null || stat -c%s /tmp/three_bill_temp.pdf)" -ge 100000 ]
+```
 
 ### 6. Rename and move the file
 
-1. Construct a descriptive filename using the bill date and amount from Step 4:
-   - Format: `Three_UK_Bill_<Month>_<Year>_GBP<Amount>.pdf`
+1. Construct the filename from step 4's metadata: `Three_UK_Bill_<Month>_<Year>_GBP<Amount>.pdf`
    - Example: `Three_UK_Bill_March_2026_GBP45.99.pdf`
    - If the amount could not be determined, omit it: `Three_UK_Bill_March_2026.pdf`
-2. Use Bash to move the file from the temp path to the user-confirmed final destination:
-
-   If the amount was determined:
+2. Move the file:
 
    ```bash
+   mkdir -p "<SAVE_LOCATION>"
    mv /tmp/three_bill_temp.pdf "<SAVE_LOCATION>/Three_UK_Bill_<Month>_<Year>_GBP<Amount>.pdf"
    ```
 
-   If the amount could not be determined:
-
-   ```bash
-   mv /tmp/three_bill_temp.pdf "<SAVE_LOCATION>/Three_UK_Bill_<Month>_<Year>.pdf"
-   ```
-
-3. Confirm the file exists and has a non-zero size:
-
-   If the amount was determined:
+3. Verify the file exists and is non-zero:
 
    ```bash
    test -s "<SAVE_LOCATION>/Three_UK_Bill_<Month>_<Year>_GBP<Amount>.pdf"
    ```
 
-   If the amount could not be determined:
+### 7. Diagnostic capture on failure
 
-   ```bash
-   test -s "<SAVE_LOCATION>/Three_UK_Bill_<Month>_<Year>.pdf"
-   ```
+If any contract assertion in step 4 or 5 returned an `error:` shape (or `ERROR:...` string), do this before bailing:
 
-### 7. Verify the PDF
+1. Stamp a timestamp: `TS=$(date +%s)`.
+2. Take a screenshot to `/tmp/three-skill-diag-${TS}.png`.
+3. Use `list_network_requests` (filter `resourceTypes: ["fetch","xhr"]`) and dump the result to `/tmp/three-skill-diag-${TS}.json` via `evaluate_script`'s `filePath` (return the filtered list as JSON-stringified text).
+4. Report both paths to the user along with the specific error code (e.g. `seed_failed`, `list_shape_changed`, `pdf_content_type:text/html`).
+5. Point the user at `references/three-api-endpoints.md` — that snapshot may be out of date and need to be regenerated against the live SPA.
 
-1. Use the Read tool to view the downloaded PDF (pages "1-3"). If the Read tool cannot render the PDF, fall back to extracting text with `pdftotext <file> -` via Bash.
-2. Check the following:
-   - **Month match**: The billing period text on the PDF matches the requested month.
-   - **Amount visible**: A total or payment amount is present and appears reasonable (a positive GBP value).
-   - **Valid bill indicators**: The PDF contains Three UK branding, an account number, and standard bill elements like VAT.
-3. Report a summary to the user:
+### 8. Verify the PDF
+
+1. Use the Read tool to view the downloaded PDF (pages "1-3"). If the Read tool cannot render the PDF, fall back to `pdftotext <file> -` via Bash.
+2. Check:
+   - **Month match**: The billing period text matches the requested month.
+   - **Amount visible**: A total or payment amount is present (positive GBP value).
+   - **Valid bill indicators**: Three UK branding, an account number, VAT.
+3. Report a summary:
    - File saved to: `<full path>`
    - Billing period: `<month/year>`
    - Amount: `<amount>`
-   - Verification: passed or failed (with details if failed)
+   - Verification: passed or failed (with details)
 
-If verification fails, warn the user with specific details about what did not match, but keep the downloaded file.
+If verification fails, warn the user with specifics but keep the file.
 
 ## Error handling
 
 | Scenario | Action |
 | -------- | ------ |
-| Not logged in | Navigate to login page, ask user to log in, wait for completion |
+| MCP Chrome won't start (stale lock) | Clean up `~/.cache/chrome-devtools-mcp/chrome-profile/SingletonLock` per Prerequisites |
+| Not logged in | Navigate to login page, ask user to log in, wait with 120s timeout |
 | Cookie banner blocking | Click accept/dismiss, continue |
-| Target month not found | List available months, ask user to pick one |
-| No download button found | Take a screenshot for visual inspection, ask user for guidance |
-| PDF request not captured | Wait and retry up to 3 times, then fall back to evaluate_script with browser retrieval, then curl as last resort |
-| Downloaded file empty or corrupt | Warn user, suggest trying the download again manually |
-| PDF verification mismatch | Warn user with details but keep the file |
-| Multiple accounts shown | List accounts, ask user which one to use |
-| Page layout unexpected | Take a screenshot, report what is visible, ask user for guidance |
+| `_tms_persistUser` cookie missing | Fall back to network-log inspection for `/care/v1/B2C/customer/<id>` |
+| Seed endpoint 401/403 | Session expired mid-run; ask user to re-login, retry once |
+| Seed endpoint 404 or 5xx | "Three API may have moved" — run step 7 (diagnostic capture), point at `references/three-api-endpoints.md` |
+| `uxfauthorization` header missing | Same as above |
+| List response shape changed (`bills` not an array) | Surface `bodyKeys` from the assertion, run diagnostic capture |
+| Requested month not in list | List available months from the API result, ask user to pick one |
+| PDF content-type not `application/pdf` | Surface the actual content-type (often `text/html` for auth redirects); run diagnostic capture |
+| Downloaded file empty or under 100 KB | Warn user, suggest retrying; keep the artefact for inspection |
+| PDF verification mismatch (month/amount) | Warn user with specifics, keep the file |
+| Multiple accounts on the session | The cookie/network fallback may return more than one customer ID; ask the user which to use |
