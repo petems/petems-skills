@@ -1,0 +1,23 @@
+{
+  "skill_name": "three-phone-bill-download-petems",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Download my latest Three bill",
+      "expected_output": "Calls the /rp-server-b2c/ seed and list-bills endpoints, picks the most recent bill, downloads the PDF via the /care/v1/.../pdf endpoint, saves to ~/Desktop/ with filename Three_UK_Bill_<Month>_<Year>_GBP<Amount>.pdf, verifies contents, reports summary",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Can you grab my March 2026 Three UK mobile bill and save it to ~/Documents/bills/",
+      "expected_output": "Maps month=March year=2026 to the matching billNumber from the list-bills response, downloads the PDF to ~/Documents/bills/ with correct filename, verifies the bill date and amount on the PDF match March 2026",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Download my Three phone bill for January 2020",
+      "expected_output": "Finds no matching {month, year} in the list-bills response, surfaces the available months from the API, asks the user to pick one. Does not write any file.",
+      "files": []
+    }
+  ]
+}
