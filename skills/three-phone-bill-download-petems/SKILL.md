@@ -123,9 +123,13 @@ async (cuid) => {
   let token = seedRes.headers.get('uxfauthorization');
   if (!token) return { error: 'no_auth_header' };
   const seedBody = await seedRes.json();
-  const billId = seedBody?.financialAccount?.id || seedBody?.billingArrangement?.id;
-  if (!billId) {
+  const rawBillId = seedBody?.financialAccount?.id ?? seedBody?.billingArrangement?.id;
+  if (rawBillId == null || (typeof rawBillId !== 'string' && typeof rawBillId !== 'number')) {
     return { error: 'seed_shape_changed', bodyKeys: Object.keys(seedBody || {}) };
+  }
+  const billId = String(rawBillId);
+  if (billId.length === 0) {
+    return { error: 'seed_shape_changed', field: 'billId', bodyKeys: Object.keys(seedBody || {}) };
   }
 
   // 2. List bills
