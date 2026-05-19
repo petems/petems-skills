@@ -162,6 +162,9 @@ async (cuid) => {
     if (!Number.isInteger(b?.month) || b.month < 0 || b.month > 11) {
       return { error: 'bill_entry_shape_changed', index: i, field: 'month', entryKeys: Object.keys(b || {}) };
     }
+    if (!Number.isInteger(b?.year) || b.year < 2000 || b.year > 2100) {
+      return { error: 'bill_entry_shape_changed', index: i, field: 'year', entryKeys: Object.keys(b || {}) };
+    }
     if (typeof b?.data?.billNumber !== 'string' || b.data.billNumber.length === 0) {
       return { error: 'bill_entry_shape_changed', index: i, field: 'billNumber', dataKeys: Object.keys(b?.data || {}) };
     }
