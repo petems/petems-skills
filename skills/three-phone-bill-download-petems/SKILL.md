@@ -76,6 +76,12 @@ Confirm parameters with the user before proceeding.
    - Use `wait_for` with timeout 120000ms, looking for text such as `["Good morning", "Dashboard", "Account Number"]`.
    - Once login is detected, take a fresh snapshot.
 6. Never enter credentials on behalf of the user.
+7. **Normalise the page origin.** After login the active tab can be left on
+   `auth.three.co.uk` rather than `www.three.co.uk`. Evaluate the current
+   URL; if the origin is not `https://www.three.co.uk`, navigate to
+   `https://www.three.co.uk/account` and take a fresh snapshot. Steps 3, 4,
+   and 5 use origin-relative `/rp-server-b2c/...` URLs and rely on the
+   `www.three.co.uk` session cookies.
 
 ### 3. Resolve the customer ID
 
