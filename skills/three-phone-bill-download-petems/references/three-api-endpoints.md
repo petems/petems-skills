@@ -1,4 +1,4 @@
-# Three UK My3 API — frozen snapshot
+# Three UK My3 API (frozen snapshot)
 
 **Last verified: 2026-05-17** against a personal account on `www.three.co.uk`.
 
@@ -37,11 +37,11 @@ GET https://www.three.co.uk/rp-server-b2c/care/v1/B2C/customer/{cuid}
 
 #### Seed: response headers we read
 
-- `uxfauthorization` — opaque token string. Required for every subsequent call.
+- `uxfauthorization`: opaque token string. Required for every subsequent call.
 
 #### Seed: response body fields we read
 
-- `financialAccount.id` (or `billingArrangement.id`) — the `billId`.
+- `financialAccount.id` (or `billingArrangement.id`): the `billId`.
 
 ### List bills
 
@@ -78,7 +78,7 @@ GET https://www.three.co.uk/rp-server-b2c/ebill/v1/customer/{cuid}/billing-arran
 
 #### List bills: response headers we re-read
 
-- `uxfauthorization` — overwrites the saved token (rotated).
+- `uxfauthorization`: overwrites the saved token (rotated).
 
 ### Download PDF
 

@@ -10,7 +10,6 @@ allowed-tools:
   - mcp__chrome-devtools__press_key
   - mcp__chrome-devtools__wait_for
   - mcp__chrome-devtools__list_network_requests
-  - mcp__chrome-devtools__get_network_request
   - mcp__chrome-devtools__evaluate_script
   - mcp__chrome-devtools__new_page
   - mcp__chrome-devtools__list_pages
@@ -118,7 +117,10 @@ async (cuid) => {
   let token = seedRes.headers.get('uxfauthorization');
   if (!token) return { error: 'no_auth_header' };
   const seedBody = await seedRes.json();
-  const billId = seedBody?.financialAccount?.id || seedBody?.billingArrangement?.id || cuid;
+  const billId = seedBody?.financialAccount?.id || seedBody?.billingArrangement?.id;
+  if (!billId) {
+    return { error: 'seed_shape_changed', bodyKeys: Object.keys(seedBody || {}) };
+  }
 
   // 2. List bills
   const listUrl = `${base}/ebill/v1/customer/${cuid}/billing-arrangement/${billId}/bill?salesChannel=selfService`;
@@ -141,15 +143,27 @@ async (cuid) => {
   window.__threeBillId = billId;
 
   // Normalise the bills list. `month` is 0-indexed in the API.
+  // Validate every entry: a missing billNumber or month would later produce
+  // `/bill/undefined/pdf` and silently fail. Surface a contract error instead.
   const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-  const bills = listBody.bills.map(b => ({
-    month: months[b.month],
-    monthIndex: b.month,
-    year: b.year,
-    billNumber: b?.data?.billNumber,
-    billAmount: b?.data?.billAmount,
-    billCloseDate: b?.data?.billCloseDate,
-  }));
+  const bills = [];
+  for (let i = 0; i < listBody.bills.length; i++) {
+    const b = listBody.bills[i];
+    if (!Number.isInteger(b?.month) || b.month < 0 || b.month > 11) {
+      return { error: 'bill_entry_shape_changed', index: i, field: 'month', entryKeys: Object.keys(b || {}) };
+    }
+    if (typeof b?.data?.billNumber !== 'string' || b.data.billNumber.length === 0) {
+      return { error: 'bill_entry_shape_changed', index: i, field: 'billNumber', dataKeys: Object.keys(b?.data || {}) };
+    }
+    bills.push({
+      month: months[b.month],
+      monthIndex: b.month,
+      year: b.year,
+      billNumber: b.data.billNumber,
+      billAmount: b.data.billAmount,
+      billCloseDate: b.data.billCloseDate,
+    });
+  }
   return { billId, bills };
 }
 ```
@@ -204,10 +218,11 @@ async (cuid, billId, billNumber) => {
 If the returned content starts with `ERROR:`, go to step 7 (Diagnostic capture). Otherwise decode:
 
 ```bash
-base64 -d /tmp/three_bill_b64.txt > /tmp/three_bill_temp.pdf
+# `base64 -d` is GNU/coreutils; macOS BSD base64 historically used -D. Try both.
+(base64 -d /tmp/three_bill_b64.txt 2>/dev/null || base64 -D /tmp/three_bill_b64.txt) > /tmp/three_bill_temp.pdf
 rm /tmp/three_bill_b64.txt
 test -s /tmp/three_bill_temp.pdf
-# Sanity-check size: a Three bill is typically 0.5–2 MB. Fewer than 100 KB is suspicious.
+# Sanity-check size: a Three bill is typically 0.5-2 MB. Fewer than 100 KB is suspicious.
 [ "$(stat -f%z /tmp/three_bill_temp.pdf 2>/dev/null || stat -c%s /tmp/three_bill_temp.pdf)" -ge 100000 ]
 ```
 
@@ -235,9 +250,18 @@ If any contract assertion in step 4 or 5 returned an `error:` shape (or `ERROR:.
 
 1. Stamp a timestamp: `TS=$(date +%s)`.
 2. Take a screenshot to `/tmp/three-skill-diag-${TS}.png`.
-3. Use `list_network_requests` (filter `resourceTypes: ["fetch","xhr"]`) and dump the result to `/tmp/three-skill-diag-${TS}.json` via `evaluate_script`'s `filePath` (return the filtered list as JSON-stringified text).
+3. Use `list_network_requests` (filter `resourceTypes: ["fetch","xhr"]`),
+   redact sensitive fields, and dump the sanitised result to
+   `/tmp/three-skill-diag-${TS}.json` via `evaluate_script`'s `filePath`
+   (return the filtered list as JSON-stringified text). Redaction rules:
+   - Replace any `authorization`, `uxfauthorization`, `cookie`, and
+     `set-cookie` header values with the literal string `"<redacted>"`.
+   - Replace the numeric customer ID segment in any `/customer/<id>` URL
+     path with `<cuid>`.
+   - Drop request/response bodies (URLs + status codes + sanitised
+     headers are enough for triage, raw bodies often contain PII).
 4. Report both paths to the user along with the specific error code (e.g. `seed_failed`, `list_shape_changed`, `pdf_content_type:text/html`).
-5. Point the user at `references/three-api-endpoints.md` — that snapshot may be out of date and need to be regenerated against the live SPA.
+5. Point the user at `references/three-api-endpoints.md`. That snapshot may be out of date and need to be regenerated against the live SPA.
 
 ### 8. Verify the PDF
 
@@ -263,7 +287,7 @@ If verification fails, warn the user with specifics but keep the file.
 | Cookie banner blocking | Click accept/dismiss, continue |
 | `_tms_persistUser` cookie missing | Fall back to network-log inspection for `/care/v1/B2C/customer/<id>` |
 | Seed endpoint 401/403 | Session expired mid-run; ask user to re-login, retry once |
-| Seed endpoint 404 or 5xx | "Three API may have moved" — run step 7 (diagnostic capture), point at `references/three-api-endpoints.md` |
+| Seed endpoint 404 or 5xx | "Three API may have moved". Run step 7 (diagnostic capture), point at `references/three-api-endpoints.md` |
 | `uxfauthorization` header missing | Same as above |
 | List response shape changed (`bills` not an array) | Surface `bodyKeys` from the assertion, run diagnostic capture |
 | Requested month not in list | List available months from the API result, ask user to pick one |
