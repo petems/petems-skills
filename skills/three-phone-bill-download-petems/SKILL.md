@@ -189,15 +189,21 @@ Two shape notes, both learned the hard way:
   reading calls "June"). Derive the calendar month and year from
   `data.billCloseDate` instead.
 
-Substitute the real value for `REPLACE_WITH_CUID` before sending the call. The
-snippet guards against a forgotten substitution: without that check an
+**Substitute by replacing the whole quoted token, quotes included, with the
+output of `JSON.stringify(value)`.** Do not paste a bare value between the
+existing quotes. Serialising produces a syntactically valid string literal for
+any input, so a malformed value cannot terminate the literal early and break
+parsing before the guards below get to run. The placeholder is written with
+double quotes as a reminder that the replacement is JSON.
+
+The snippet also guards against a forgotten substitution: without that check an
 unreplaced placeholder is sent to the API and comes back as a generic
 `seed_failed`, which reads like a Three-side outage rather than an operator
 error.
 
 ```javascript
 async () => {
-  const cuid = 'REPLACE_WITH_CUID';
+  const cuid = "REPLACE_WITH_CUID";
   if (/REPLACE_WITH_/.test(cuid)) return { error: 'placeholder_not_replaced', field: 'cuid' };
   if (!/^\d{6,}$/.test(cuid)) return { error: 'invalid_identifier', field: 'cuid', value: String(cuid).slice(0, 40) };
   const base = '/rp-server-b2c';
@@ -212,16 +218,12 @@ async () => {
   if (!token) return { error: 'no_auth_header' };
   const seedBody = await seedRes.json();
   const customer = seedBody?.customer ?? seedBody;
-  // `customer.id` is the cuid, NOT the billing arrangement id. On personal
-  // accounts the two happen to be equal, but falling back to it blindly would
-  // silently misroute calls on any account where they differ. Use it only when
-  // it matches the known cuid, and say so in the result.
-  let rawBillId = customer?.financialAccount?.[0]?.id ?? customer?.billingArrangement?.id;
-  let billIdFallback = null;
-  if (rawBillId == null && customer?.id != null && String(customer.id) === cuid) {
-    rawBillId = customer.id;
-    billIdFallback = 'used_customer_id_matching_cuid';
-  }
+  // Only the documented billing fields are acceptable. Do NOT fall back to
+  // `customer.id`: that is the cuid, and the fact that it equals the billing
+  // arrangement id on personal accounts does not prove it does so in general.
+  // If both documented fields are absent, fail with seed_shape_changed rather
+  // than constructing a request that may be misrouted.
+  const rawBillId = customer?.financialAccount?.[0]?.id ?? customer?.billingArrangement?.id;
   if (rawBillId == null || (typeof rawBillId !== 'string' && typeof rawBillId !== 'number')) {
     return { error: 'seed_shape_changed', field: 'billId', bodyKeys: Object.keys(seedBody || {}), customerKeys: Object.keys(customer || {}) };
   }
@@ -321,10 +323,12 @@ Three constraints on `evaluate_script` here, all of which bite:
    is rejected with "is not within any of the configured workspace roots".
    Write to a dot-file inside the current project directory and delete it
    after decoding.
-3. **Substitute values safely.** Emit each identifier with `JSON.stringify`
-   rather than pasting it between single quotes, so a stray quote can never
-   terminate the literal early. Combined with the digit-only guards in the
-   snippet below, that closes the injection path into the URL.
+3. **Substitute values safely.** Replace each whole quoted token, quotes
+   included, with the output of `JSON.stringify(value)`, exactly as in step 4.
+   Never paste a bare value between the existing quotes: serialisation is what
+   guarantees the script still parses when the value is malformed, and the
+   digit-only guards below then reject it cleanly instead of the script dying
+   at parse time.
 4. **The written file is JSON, and the extension is normalised to `.json`.**
    Asking for `.three_bill_b64.tmp` produces `.three_bill_b64.json`, and the
    contents are the *JSON-quoted* string (wrapped in `"`), not raw base64.
@@ -335,9 +339,9 @@ Call `evaluate_script` with `filePath: "<PROJECT_DIR>/.three_bill_b64.tmp"` and 
 
 ```javascript
 async () => {
-  const cuid = 'REPLACE_WITH_CUID';
-  const billId = 'REPLACE_WITH_BILL_ID';
-  const billNumber = 'REPLACE_WITH_BILL_NUMBER';
+  const cuid = "REPLACE_WITH_CUID";
+  const billId = "REPLACE_WITH_BILL_ID";
+  const billNumber = "REPLACE_WITH_BILL_NUMBER";
   // Guard the substitution and the format before building a URL. All three are
   // digit-only; anything else either means a missed replacement or a value that
   // could escape its path segment.
