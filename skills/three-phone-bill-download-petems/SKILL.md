@@ -406,21 +406,30 @@ test -s /tmp/three_bill_temp.pdf
 
 ### 6. Rename and move the file
 
-1. Construct the filename from step 4's metadata: `Three_UK_Bill_<Month>_<Year>_GBP<Amount>.pdf`
-   - Example: `Three_UK_Bill_March_2026_GBP45.99.pdf`
+1. Build the filename once from step 4's metadata, then reuse it for every
+   command below. There are two variants, so binding it to a shell variable
+   keeps the `mv` and the check from drifting apart:
+   - With an amount: `Three_UK_Bill_March_2026_GBP45.99.pdf`
    - If the amount could not be determined (`billAmount` is `null` from
      step 4), omit it: `Three_UK_Bill_March_2026.pdf`
+
+   ```bash
+   # Pick ONE, substituting the real month, year, and toFixed(2) amount.
+   filename="Three_UK_Bill_<Month>_<Year>_GBP<Amount>.pdf"   # billAmount was a number
+   # filename="Three_UK_Bill_<Month>_<Year>.pdf"             # billAmount was null
+   ```
+
 2. Move the file:
 
    ```bash
    mkdir -p "<SAVE_LOCATION>"
-   mv /tmp/three_bill_temp.pdf "<SAVE_LOCATION>/Three_UK_Bill_<Month>_<Year>_GBP<Amount>.pdf"
+   mv /tmp/three_bill_temp.pdf "<SAVE_LOCATION>/$filename"
    ```
 
 3. Verify the file exists and is non-zero:
 
    ```bash
-   test -s "<SAVE_LOCATION>/Three_UK_Bill_<Month>_<Year>_GBP<Amount>.pdf"
+   test -s "<SAVE_LOCATION>/$filename"
    ```
 
 ### 7. Diagnostic capture on failure
