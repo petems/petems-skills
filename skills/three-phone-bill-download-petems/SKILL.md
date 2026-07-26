@@ -276,12 +276,22 @@ async () => {
     if (year < 2000 || year > 2100) {
       return { error: 'bill_entry_shape_changed', index: i, field: 'billCloseDate_year', value: year };
     }
+    // billAmount is cosmetic: it names the file and is cross-checked against
+    // the PDF in step 8, and never reaches a URL. So a bad value must not abort
+    // the download. Normalise rather than fail: accept a finite number, coerce
+    // a numeric string, otherwise null so step 6 omits it from the filename as
+    // it already documents.
+    const rawAmount = b?.data?.billAmount;
+    const parsedAmount = (rawAmount === null || rawAmount === undefined || rawAmount === '')
+      ? NaN
+      : Number(rawAmount);
+    const billAmount = Number.isFinite(parsedAmount) ? parsedAmount : null;
     bills.push({
       month: months[close.getUTCMonth()],
       monthIndex: close.getUTCMonth(),
       year,
       billNumber: b.data.billNumber,
-      billAmount: b.data.billAmount,
+      billAmount,
       billCloseDate: b.data.billCloseDate,
       billStartDate: b.data.billStartDate,
       billEndDate: b.data.billEndDate,
@@ -299,8 +309,12 @@ Map the user's requested month and year to a `billNumber`:
 - If the user asked for a named month/year, find the entry whose `month`/`year` match.
 - If no match, list the available `{month, year}` entries from the result and ask the user to pick one. Do not proceed.
 
-`billAmount` is a **number** (e.g. `33.08`), not a string. Format it to two
-decimal places for the filename in step 6.
+`billAmount` is a **number** (e.g. `33.08`), not a string. The normalisation
+above guarantees it is either a finite number or `null`, so format it with
+`toFixed(2)` for the filename in step 6 when it is non-null, and take the
+`null` branch of the filename rule when it is not. A `null` here means the API
+contract drifted: mention it to the user, since step 8 then has no amount to
+cross-check against the PDF.
 
 Sanity check before downloading: the chosen bill's `billEndDate` should be the
 23rd of the requested month and `billCloseDate` the 24th. If the month you
@@ -394,7 +408,8 @@ test -s /tmp/three_bill_temp.pdf
 
 1. Construct the filename from step 4's metadata: `Three_UK_Bill_<Month>_<Year>_GBP<Amount>.pdf`
    - Example: `Three_UK_Bill_March_2026_GBP45.99.pdf`
-   - If the amount could not be determined, omit it: `Three_UK_Bill_March_2026.pdf`
+   - If the amount could not be determined (`billAmount` is `null` from
+     step 4), omit it: `Three_UK_Bill_March_2026.pdf`
 2. Move the file:
 
    ```bash
@@ -438,7 +453,9 @@ If any contract assertion in step 4 or 5 returned an `error:` shape (or `ERROR:.
      the authoritative check that the `month` field was mapped correctly
      (see step 4). Confirm it rather than trusting the API label.
    - **Amount visible**: `Total charges after VAT` matches the `billAmount`
-     used in the filename.
+     used in the filename. If `billAmount` was `null`, there is nothing to
+     compare against: read the total off the PDF, report it, and flag that the
+     API did not supply a usable amount.
    - **Account match**: `Your account number` equals the `cuid` from step 3.
    - **Valid bill indicators**: Hutchison 3G UK Ltd, a VAT reg. no., a due date.
 3. Report a summary:
