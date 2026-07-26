@@ -93,17 +93,26 @@ Confirm parameters with the user before proceeding.
    the Three backend session stays anonymous (this happens if the browser was
    killed mid-flow). Check it before spending calls:
 
+   Fail closed: only a literal `isAnonymous === false` counts as authenticated.
+   A 200 carrying a missing or non-boolean `isAnonymous` is treated as a
+   failure, not as permission to continue.
+
    ```javascript
    async () => {
      const r = await fetch('/rp-server-b2c/authentication/v1/B2C/user?salesChannel=selfService', { credentials: 'include' });
      if (r.status !== 200) return { error: 'auth_check_failed', status: r.status };
-     const b = await r.json();
-     return { isAnonymous: b?.isAnonymous, userId: b?.userId };
+     let b;
+     try { b = await r.json(); } catch (e) { return { error: 'auth_check_unparseable', message: String(e) }; }
+     if (b?.isAnonymous !== false) {
+       return { error: 'session_not_authenticated', isAnonymous: b?.isAnonymous ?? null, bodyKeys: Object.keys(b || {}) };
+     }
+     return { authenticated: true, userId: b?.userId };
    }
    ```
 
-   If `isAnonymous` is `true` (or the call returns 500), the My3 session is
-   broken even though the header shows "My3 account". Ask the user to log in
+   Proceed only on `authenticated: true`. On any error shape (including
+   `session_not_authenticated`, a 500, or an unparseable body) the My3 session
+   is broken even though the header shows "My3 account". Ask the user to log in
    again and do not proceed. Symptom if you push on regardless:
    `/account/view-bill` renders "Something went wrong. We can't load this page
    right now." with an error code.
@@ -131,6 +140,12 @@ Run via `evaluate_script`:
   if (!raw) return { error: 'persistor_missing' };
   let outer;
   try { outer = JSON.parse(raw); } catch (e) { return { error: 'persistor_parse_failed', message: String(e) }; }
+  // JSON.parse("null") returns null, and a bare string or array is equally
+  // possible if the store shape changes. Check before dereferencing, or the
+  // throw escapes as an opaque tool error instead of a contract error.
+  if (outer === null || typeof outer !== 'object' || Array.isArray(outer)) {
+    return { error: 'persistor_parse_failed', reason: 'not_an_object', type: outer === null ? 'null' : typeof outer };
+  }
   let cuid = outer.customerId;
   try { cuid = JSON.parse(cuid); } catch (e) { /* already a bare string */ }
   cuid = String(cuid == null ? '' : cuid);
@@ -174,9 +189,17 @@ Two shape notes, both learned the hard way:
   reading calls "June"). Derive the calendar month and year from
   `data.billCloseDate` instead.
 
+Substitute the real value for `REPLACE_WITH_CUID` before sending the call. The
+snippet guards against a forgotten substitution: without that check an
+unreplaced placeholder is sent to the API and comes back as a generic
+`seed_failed`, which reads like a Three-side outage rather than an operator
+error.
+
 ```javascript
 async () => {
   const cuid = 'REPLACE_WITH_CUID';
+  if (/REPLACE_WITH_/.test(cuid)) return { error: 'placeholder_not_replaced', field: 'cuid' };
+  if (!/^\d{6,}$/.test(cuid)) return { error: 'invalid_identifier', field: 'cuid', value: String(cuid).slice(0, 40) };
   const base = '/rp-server-b2c';
   // 1. Seed: get auth token + billing arrangement id
   const seedUrl = `${base}/care/v1/B2C/customer/${cuid}?salesChannel=selfService&initId=Digital&levelOfData=owningIndividual,financialAccount`;
@@ -189,13 +212,22 @@ async () => {
   if (!token) return { error: 'no_auth_header' };
   const seedBody = await seedRes.json();
   const customer = seedBody?.customer ?? seedBody;
-  const rawBillId = customer?.financialAccount?.[0]?.id ?? customer?.id ?? customer?.billingArrangement?.id;
+  // `customer.id` is the cuid, NOT the billing arrangement id. On personal
+  // accounts the two happen to be equal, but falling back to it blindly would
+  // silently misroute calls on any account where they differ. Use it only when
+  // it matches the known cuid, and say so in the result.
+  let rawBillId = customer?.financialAccount?.[0]?.id ?? customer?.billingArrangement?.id;
+  let billIdFallback = null;
+  if (rawBillId == null && customer?.id != null && String(customer.id) === cuid) {
+    rawBillId = customer.id;
+    billIdFallback = 'used_customer_id_matching_cuid';
+  }
   if (rawBillId == null || (typeof rawBillId !== 'string' && typeof rawBillId !== 'number')) {
-    return { error: 'seed_shape_changed', bodyKeys: Object.keys(seedBody || {}), customerKeys: Object.keys(customer || {}) };
+    return { error: 'seed_shape_changed', field: 'billId', bodyKeys: Object.keys(seedBody || {}), customerKeys: Object.keys(customer || {}) };
   }
   const billId = String(rawBillId);
-  if (billId.length === 0) {
-    return { error: 'seed_shape_changed', field: 'billId', bodyKeys: Object.keys(seedBody || {}) };
+  if (!/^\d{6,}$/.test(billId)) {
+    return { error: 'invalid_identifier', field: 'billId', value: billId.slice(0, 40) };
   }
 
   // 2. List bills
@@ -228,8 +260,10 @@ async () => {
   const bills = [];
   for (let i = 0; i < listBody.bills.length; i++) {
     const b = listBody.bills[i];
-    if (typeof b?.data?.billNumber !== 'string' || b.data.billNumber.length === 0) {
-      return { error: 'bill_entry_shape_changed', index: i, field: 'billNumber', dataKeys: Object.keys(b?.data || {}) };
+    // Digits only. billNumber is interpolated into a URL path in step 5, so a
+    // value containing a quote or `/` would break out of the path segment.
+    if (typeof b?.data?.billNumber !== 'string' || !/^\d+$/.test(b.data.billNumber)) {
+      return { error: 'bill_entry_shape_changed', index: i, field: 'billNumber', value: String(b?.data?.billNumber).slice(0, 40), dataKeys: Object.keys(b?.data || {}) };
     }
     const closeMs = Date.parse(b?.data?.billCloseDate);
     if (!Number.isFinite(closeMs)) {
@@ -287,7 +321,11 @@ Three constraints on `evaluate_script` here, all of which bite:
    is rejected with "is not within any of the configured workspace roots".
    Write to a dot-file inside the current project directory and delete it
    after decoding.
-3. **The written file is JSON, and the extension is normalised to `.json`.**
+3. **Substitute values safely.** Emit each identifier with `JSON.stringify`
+   rather than pasting it between single quotes, so a stray quote can never
+   terminate the literal early. Combined with the digit-only guards in the
+   snippet below, that closes the injection path into the URL.
+4. **The written file is JSON, and the extension is normalised to `.json`.**
    Asking for `.three_bill_b64.tmp` produces `.three_bill_b64.json`, and the
    contents are the *JSON-quoted* string (wrapped in `"`), not raw base64.
    Strip the quotes before decoding, and read back the `.json` path that the
@@ -300,6 +338,13 @@ async () => {
   const cuid = 'REPLACE_WITH_CUID';
   const billId = 'REPLACE_WITH_BILL_ID';
   const billNumber = 'REPLACE_WITH_BILL_NUMBER';
+  // Guard the substitution and the format before building a URL. All three are
+  // digit-only; anything else either means a missed replacement or a value that
+  // could escape its path segment.
+  for (const [field, value] of [['cuid', cuid], ['billId', billId], ['billNumber', billNumber]]) {
+    if (/REPLACE_WITH_/.test(value)) return `ERROR:placeholder_not_replaced:${field}`;
+    if (!/^\d+$/.test(value)) return `ERROR:invalid_identifier:${field}`;
+  }
   const token = window.__threeAuth;
   if (!token) return 'ERROR:no_token';
   const url = `/rp-server-b2c/care/v1/customer/${cuid}/billing-arrangement/${billId}/bill/${billNumber}/pdf?salesChannel=selfService`;
@@ -408,7 +453,9 @@ If verification fails, warn the user with specifics but keep the file.
 | Not logged in | Navigate to login page, ask user to log in, wait with 120s timeout |
 | Cookie banner blocking | Click accept/dismiss, continue |
 | `persistor_missing` / `no_cuid_in_store` / cuid reads as `"undefined"` | You are on `/customer-logged`, not `/account`. Load the dashboard (step 2.8), then retry; else use the step 3 fallbacks |
-| Session anonymous (`isAnonymous: true`, or 500 from `authentication/v1/B2C/user`) | Auth0 logged in but My3 did not. Ask the user to log in again; do not proceed |
+| `session_not_authenticated` / `auth_check_failed` / `auth_check_unparseable` | Auth0 logged in but My3 did not, or the check response was malformed. Ask the user to log in again; do not proceed. Only `isAnonymous === false` counts as authenticated |
+| `placeholder_not_replaced:<field>` | A `REPLACE_WITH_*` literal was left in the snippet. Substitute the real value and re-run; this is an operator error, not an API failure |
+| `invalid_identifier:<field>` | An identifier is not digit-only. Do not build a URL from it. Re-resolve it from step 3 or 4 |
 | Killing MCP Chrome mid-login | Drops the My3 session while leaving Auth0 cookies. Re-login before retrying |
 | Seed endpoint 401/403 | Session expired mid-run; ask user to re-login, retry once |
 | Seed endpoint 404 or 5xx | "Three API may have moved". Run step 7 (diagnostic capture), point at `references/three-api-endpoints.md` |
