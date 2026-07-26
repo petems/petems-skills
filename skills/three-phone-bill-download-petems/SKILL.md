@@ -82,36 +82,130 @@ Confirm parameters with the user before proceeding.
    `https://www.three.co.uk/account` and take a fresh snapshot. Steps 3, 4,
    and 5 use origin-relative `/rp-server-b2c/...` URLs and rely on the
    `www.three.co.uk` session cookies.
+8. **Load the dashboard, not just the landing page.** Auth0 drops you on
+   `https://www.three.co.uk/customer-logged`, which is a marketing landing
+   page. It does *not* populate customer state: on that page the customer ID
+   reads back as the literal string `"undefined"` and the redux store holds
+   `customerId: ""`. Navigate to `https://www.three.co.uk/account` and wait
+   for `["Account Number", "Good morning", "Good afternoon", "Good evening"]`
+   before attempting step 3.
+9. **Confirm the session is not anonymous.** An Auth0 login can succeed while
+   the Three backend session stays anonymous (this happens if the browser was
+   killed mid-flow). Check it before spending calls:
+
+   Fail closed: only a literal `isAnonymous === false` counts as authenticated.
+   A 200 carrying a missing or non-boolean `isAnonymous` is treated as a
+   failure, not as permission to continue.
+
+   ```javascript
+   async () => {
+     const r = await fetch('/rp-server-b2c/authentication/v1/B2C/user?salesChannel=selfService', { credentials: 'include' });
+     if (r.status !== 200) return { error: 'auth_check_failed', status: r.status };
+     let b;
+     try { b = await r.json(); } catch (e) { return { error: 'auth_check_unparseable', message: String(e) }; }
+     if (b?.isAnonymous !== false) {
+       return { error: 'session_not_authenticated', isAnonymous: b?.isAnonymous ?? null, bodyKeys: Object.keys(b || {}) };
+     }
+     return { authenticated: true, userId: b?.userId };
+   }
+   ```
+
+   Proceed only on `authenticated: true`. On any error shape (including
+   `session_not_authenticated`, a 500, or an unparseable body) the My3 session
+   is broken even though the header shows "My3 account". Ask the user to log in
+   again and do not proceed. Symptom if you push on regardless:
+   `/account/view-bill` renders "Something went wrong. We can't load this page
+   right now." with an error code.
 
 ### 3. Resolve the customer ID
 
-The customer ID (`cuid`) is needed for every API call. The cleanest way to get it is from the `_tms_persistUser` cookie that Three sets after login.
+The customer ID (`cuid`) is needed for every API call. It comes from the
+SPA's redux store, persisted in `sessionStorage` under
+`persist:customerProfilePersistor`.
+
+Do **not** try the `_tms_persistUser` cookie. Earlier versions of this skill
+did; its value is the literal string `false` (a remember-me flag), not a JSON
+blob with a `cuid` field. `JSON.parse("false")` yields `false`, so the old
+extraction always failed with `no_cuid_in_cookie` and empty `keys`.
+
+`redux-persist` double-encodes: the outer value is JSON whose *values are
+themselves JSON strings*, so `customerId` parses out of `"\"949613941\""`.
+This only works once the dashboard has loaded (step 2.8).
 
 Run via `evaluate_script`:
 
 ```javascript
 () => {
-  const raw = document.cookie.split('; ').find(c => c.startsWith('_tms_persistUser='));
-  if (!raw) return { error: 'cookie_missing' };
-  try {
-    const decoded = decodeURIComponent(raw.split('=').slice(1).join('='));
-    const parsed = JSON.parse(decoded);
-    if (!parsed.cuid) return { error: 'no_cuid_in_cookie', keys: Object.keys(parsed) };
-    return { cuid: String(parsed.cuid) };
-  } catch (e) {
-    return { error: 'cookie_parse_failed', message: String(e) };
+  const raw = sessionStorage.getItem('persist:customerProfilePersistor');
+  if (!raw) return { error: 'persistor_missing' };
+  let outer;
+  try { outer = JSON.parse(raw); } catch (e) { return { error: 'persistor_parse_failed', message: String(e) }; }
+  // JSON.parse("null") returns null, and a bare string or array is equally
+  // possible if the store shape changes. Check before dereferencing, or the
+  // throw escapes as an opaque tool error instead of a contract error.
+  if (outer === null || typeof outer !== 'object' || Array.isArray(outer)) {
+    return { error: 'persistor_parse_failed', reason: 'not_an_object', type: outer === null ? 'null' : typeof outer };
   }
+  let cuid = outer.customerId;
+  try { cuid = JSON.parse(cuid); } catch (e) { /* already a bare string */ }
+  cuid = String(cuid == null ? '' : cuid);
+  if (!/^\d{6,}$/.test(cuid)) {
+    return { error: 'no_cuid_in_store', value: cuid.slice(0, 40), outerKeys: Object.keys(outer).slice(0, 25) };
+  }
+  return { cuid };
 }
 ```
 
-**Fallback** (cookie missing or unparseable): use `list_network_requests` to find the first `/care/v1/B2C/customer/<id>?` request the SPA has already made, and extract `<id>` from the URL path.
+**Fallbacks**, in order, if that returns an error:
+
+1. Use `list_network_requests` (filter `resourceTypes: ["fetch","xhr"]`) to find
+   a `/rp-server-b2c/care/v1/B2C/customer/<id>?` request the SPA has already
+   made, and take `<id>` from the URL path.
+2. Read the "Account Number" shown on the `/account` dashboard. For personal
+   accounts this is the same value as the `cuid`. Cross-check it against the
+   `Your account number` field on the downloaded PDF in step 8.
+
+If the value is still `"undefined"` or empty, you are almost certainly on
+`/customer-logged` rather than `/account`. Go back to step 2.8.
 
 ### 4. Call the API (seed + list bills)
 
 Run a single `evaluate_script` that calls the seed endpoint, then the list-bills endpoint. The seed endpoint returns a `uxfauthorization` token in its response header that must be passed as the `Authorization` header on subsequent calls. The token rotates on every call, so re-read it from each response.
 
+**`evaluate_script` cannot take arbitrary arguments.** Its `args` parameter
+accepts *element uids from a page snapshot only*, so passing `cuid` through it
+fails with "No snapshot found for page". Inline the value into the function
+body as a literal instead (substitute the real `cuid` before sending the call).
+
+Two shape notes, both learned the hard way:
+
+- The seed body is nested under a top-level `customer` key, and
+  `financialAccount` is an **array**, so the billing arrangement id lives at
+  `customer.financialAccount[0].id`. The old path
+  (`seedBody.financialAccount.id`) is always `undefined`.
+- `bills[i].month` is **not** a calendar month. It is a billing-period counter
+  and equals `bills[i].data.billPeriod`. Deriving the month from it mislabels
+  bills (the bill closing 24 Jul 2026 has `month: 5`, which a 0-indexed
+  reading calls "June"). Derive the calendar month and year from
+  `data.billCloseDate` instead.
+
+**Substitute by replacing the whole quoted token, quotes included, with the
+output of `JSON.stringify(value)`.** Do not paste a bare value between the
+existing quotes. Serialising produces a syntactically valid string literal for
+any input, so a malformed value cannot terminate the literal early and break
+parsing before the guards below get to run. The placeholder is written with
+double quotes as a reminder that the replacement is JSON.
+
+The snippet also guards against a forgotten substitution: without that check an
+unreplaced placeholder is sent to the API and comes back as a generic
+`seed_failed`, which reads like a Three-side outage rather than an operator
+error.
+
 ```javascript
-async (cuid) => {
+async () => {
+  const cuid = "REPLACE_WITH_CUID";
+  if (/REPLACE_WITH_/.test(cuid)) return { error: 'placeholder_not_replaced', field: 'cuid' };
+  if (!/^\d{6,}$/.test(cuid)) return { error: 'invalid_identifier', field: 'cuid', value: String(cuid).slice(0, 40) };
   const base = '/rp-server-b2c';
   // 1. Seed: get auth token + billing arrangement id
   const seedUrl = `${base}/care/v1/B2C/customer/${cuid}?salesChannel=selfService&initId=Digital&levelOfData=owningIndividual,financialAccount`;
@@ -123,13 +217,19 @@ async (cuid) => {
   let token = seedRes.headers.get('uxfauthorization');
   if (!token) return { error: 'no_auth_header' };
   const seedBody = await seedRes.json();
-  const rawBillId = seedBody?.financialAccount?.id ?? seedBody?.billingArrangement?.id;
+  const customer = seedBody?.customer ?? seedBody;
+  // Only the documented billing fields are acceptable. Do NOT fall back to
+  // `customer.id`: that is the cuid, and the fact that it equals the billing
+  // arrangement id on personal accounts does not prove it does so in general.
+  // If both documented fields are absent, fail with seed_shape_changed rather
+  // than constructing a request that may be misrouted.
+  const rawBillId = customer?.financialAccount?.[0]?.id ?? customer?.billingArrangement?.id;
   if (rawBillId == null || (typeof rawBillId !== 'string' && typeof rawBillId !== 'number')) {
-    return { error: 'seed_shape_changed', bodyKeys: Object.keys(seedBody || {}) };
+    return { error: 'seed_shape_changed', field: 'billId', bodyKeys: Object.keys(seedBody || {}), customerKeys: Object.keys(customer || {}) };
   }
   const billId = String(rawBillId);
-  if (billId.length === 0) {
-    return { error: 'seed_shape_changed', field: 'billId', bodyKeys: Object.keys(seedBody || {}) };
+  if (!/^\d{6,}$/.test(billId)) {
+    return { error: 'invalid_identifier', field: 'billId', value: billId.slice(0, 40) };
   }
 
   // 2. List bills
@@ -152,42 +252,74 @@ async (cuid) => {
   window.__threeAuth = token;
   window.__threeBillId = billId;
 
-  // Normalise the bills list. `month` is 0-indexed in the API.
-  // Validate every entry: a missing billNumber or month would later produce
-  // `/bill/undefined/pdf` and silently fail. Surface a contract error instead.
+  // Normalise the bills list. Ignore `month`/`year` on the entry: `month` is a
+  // billing-period counter, not a calendar month. The calendar month a user
+  // means by "my July bill" is the month the bill was issued, i.e.
+  // `data.billCloseDate` (the period it covers ends the day before).
+  // Validate every entry: a missing billNumber or close date would later
+  // produce `/bill/undefined/pdf` and silently fail. Surface a contract error.
   const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
   const bills = [];
   for (let i = 0; i < listBody.bills.length; i++) {
     const b = listBody.bills[i];
-    if (!Number.isInteger(b?.month) || b.month < 0 || b.month > 11) {
-      return { error: 'bill_entry_shape_changed', index: i, field: 'month', entryKeys: Object.keys(b || {}) };
+    // Digits only. billNumber is interpolated into a URL path in step 5, so a
+    // value containing a quote or `/` would break out of the path segment.
+    if (typeof b?.data?.billNumber !== 'string' || !/^\d+$/.test(b.data.billNumber)) {
+      return { error: 'bill_entry_shape_changed', index: i, field: 'billNumber', value: String(b?.data?.billNumber).slice(0, 40), dataKeys: Object.keys(b?.data || {}) };
     }
-    if (!Number.isInteger(b?.year) || b.year < 2000 || b.year > 2100) {
-      return { error: 'bill_entry_shape_changed', index: i, field: 'year', entryKeys: Object.keys(b || {}) };
+    const closeMs = Date.parse(b?.data?.billCloseDate);
+    if (!Number.isFinite(closeMs)) {
+      return { error: 'bill_entry_shape_changed', index: i, field: 'billCloseDate', value: String(b?.data?.billCloseDate).slice(0, 40) };
     }
-    if (typeof b?.data?.billNumber !== 'string' || b.data.billNumber.length === 0) {
-      return { error: 'bill_entry_shape_changed', index: i, field: 'billNumber', dataKeys: Object.keys(b?.data || {}) };
+    const close = new Date(closeMs);
+    const year = close.getUTCFullYear();
+    if (year < 2000 || year > 2100) {
+      return { error: 'bill_entry_shape_changed', index: i, field: 'billCloseDate_year', value: year };
     }
+    // billAmount is cosmetic: it names the file and is cross-checked against
+    // the PDF in step 8, and never reaches a URL. So a bad value must not abort
+    // the download. Normalise rather than fail: accept a finite number, coerce
+    // a numeric string, otherwise null so step 6 omits it from the filename as
+    // it already documents.
+    const rawAmount = b?.data?.billAmount;
+    const parsedAmount = (rawAmount === null || rawAmount === undefined || rawAmount === '')
+      ? NaN
+      : Number(rawAmount);
+    const billAmount = Number.isFinite(parsedAmount) ? parsedAmount : null;
     bills.push({
-      month: months[b.month],
-      monthIndex: b.month,
-      year: b.year,
+      month: months[close.getUTCMonth()],
+      monthIndex: close.getUTCMonth(),
+      year,
       billNumber: b.data.billNumber,
-      billAmount: b.data.billAmount,
+      billAmount,
       billCloseDate: b.data.billCloseDate,
+      billStartDate: b.data.billStartDate,
+      billEndDate: b.data.billEndDate,
+      billPeriod: b.data.billPeriod,
     });
   }
+  bills.sort((x, y) => Date.parse(y.billCloseDate) - Date.parse(x.billCloseDate));
   return { billId, bills };
 }
 ```
 
 Map the user's requested month and year to a `billNumber`:
 
-- If the user asked for "latest", pick the most recent entry (highest year, then highest `monthIndex`).
-- If the user asked for a named month/year, find the matching entry.
+- If the user asked for "latest", take `bills[0]` (the list is sorted newest-first by close date).
+- If the user asked for a named month/year, find the entry whose `month`/`year` match.
 - If no match, list the available `{month, year}` entries from the result and ask the user to pick one. Do not proceed.
 
-Capture `billAmount` for the filename in step 6.
+`billAmount` is a **number** (e.g. `33.08`), not a string. The normalisation
+above guarantees it is either a finite number or `null`, so format it with
+`toFixed(2)` for the filename in step 6 when it is non-null, and take the
+`null` branch of the filename rule when it is not. A `null` here means the API
+contract drifted: mention it to the user, since step 8 then has no amount to
+cross-check against the PDF.
+
+Sanity check before downloading: the chosen bill's `billEndDate` should be the
+23rd of the requested month and `billCloseDate` the 24th. If the month you
+matched has a period ending in a different month, re-read the mapping notes
+above before proceeding.
 
 ### 5. Download the PDF
 
@@ -197,10 +329,40 @@ Fetch the PDF, base64-encode the response body, and write the encoded
 string straight to a file using `evaluate_script`'s `filePath` parameter.
 Then have Bash decode it.
 
-Call `evaluate_script` with `filePath: "/tmp/three_bill_b64.txt"` and this function (pass `cuid`, `billId`, `billNumber` as `args`):
+Three constraints on `evaluate_script` here, all of which bite:
+
+1. **No arbitrary `args`** (as in step 4). Inline `cuid`, `billId`, and
+   `billNumber` as literals in the function body.
+2. **`filePath` is sandboxed to the workspace roots.** A path under `/tmp`
+   is rejected with "is not within any of the configured workspace roots".
+   Write to a dot-file inside the current project directory and delete it
+   after decoding.
+3. **Substitute values safely.** Replace each whole quoted token, quotes
+   included, with the output of `JSON.stringify(value)`, exactly as in step 4.
+   Never paste a bare value between the existing quotes: serialisation is what
+   guarantees the script still parses when the value is malformed, and the
+   digit-only guards below then reject it cleanly instead of the script dying
+   at parse time.
+4. **The written file is JSON, and the extension is normalised to `.json`.**
+   Asking for `.three_bill_b64.tmp` produces `.three_bill_b64.json`, and the
+   contents are the *JSON-quoted* string (wrapped in `"`), not raw base64.
+   Strip the quotes before decoding, and read back the `.json` path that the
+   tool reports rather than the one you requested.
+
+Call `evaluate_script` with `filePath: "<PROJECT_DIR>/.three_bill_b64.tmp"` and this function:
 
 ```javascript
-async (cuid, billId, billNumber) => {
+async () => {
+  const cuid = "REPLACE_WITH_CUID";
+  const billId = "REPLACE_WITH_BILL_ID";
+  const billNumber = "REPLACE_WITH_BILL_NUMBER";
+  // Guard the substitution and the format before building a URL. All three are
+  // digit-only; anything else either means a missed replacement or a value that
+  // could escape its path segment.
+  for (const [field, value] of [['cuid', cuid], ['billId', billId], ['billNumber', billNumber]]) {
+    if (/REPLACE_WITH_/.test(value)) return `ERROR:placeholder_not_replaced:${field}`;
+    if (!/^\d+$/.test(value)) return `ERROR:invalid_identifier:${field}`;
+  }
   const token = window.__threeAuth;
   if (!token) return 'ERROR:no_token';
   const url = `/rp-server-b2c/care/v1/customer/${cuid}/billing-arrangement/${billId}/bill/${billNumber}/pdf?salesChannel=selfService`;
@@ -228,12 +390,15 @@ async (cuid, billId, billNumber) => {
 }
 ```
 
-If the returned content starts with `ERROR:`, go to step 7 (Diagnostic capture). Otherwise decode:
+If the returned content starts with `ERROR:`, go to step 7 (Diagnostic capture). Otherwise decode, stripping the JSON quoting:
 
 ```bash
-# `base64 -d` is GNU/coreutils; macOS BSD base64 historically used -D. Try both.
-(base64 -d /tmp/three_bill_b64.txt 2>/dev/null || base64 -D /tmp/three_bill_b64.txt) > /tmp/three_bill_temp.pdf
-rm /tmp/three_bill_b64.txt
+# `tr -d '"'` removes the JSON string quotes; base64 has no `"` in its alphabet,
+# so this is safe. `base64 -d` is GNU/coreutils; macOS BSD base64 historically
+# used -D. Try both.
+tr -d '"' < "<PROJECT_DIR>/.three_bill_b64.json" \
+  | { base64 -d 2>/dev/null || base64 -D; } > /tmp/three_bill_temp.pdf
+rm -f "<PROJECT_DIR>/.three_bill_b64.json"
 test -s /tmp/three_bill_temp.pdf
 # Sanity-check size: a Three bill is typically 0.5-2 MB. Fewer than 100 KB is suspicious.
 [ "$(stat -f%z /tmp/three_bill_temp.pdf 2>/dev/null || stat -c%s /tmp/three_bill_temp.pdf)" -ge 100000 ]
@@ -241,20 +406,30 @@ test -s /tmp/three_bill_temp.pdf
 
 ### 6. Rename and move the file
 
-1. Construct the filename from step 4's metadata: `Three_UK_Bill_<Month>_<Year>_GBP<Amount>.pdf`
-   - Example: `Three_UK_Bill_March_2026_GBP45.99.pdf`
-   - If the amount could not be determined, omit it: `Three_UK_Bill_March_2026.pdf`
+1. Build the filename once from step 4's metadata, then reuse it for every
+   command below. There are two variants, so binding it to a shell variable
+   keeps the `mv` and the check from drifting apart:
+   - With an amount: `Three_UK_Bill_March_2026_GBP45.99.pdf`
+   - If the amount could not be determined (`billAmount` is `null` from
+     step 4), omit it: `Three_UK_Bill_March_2026.pdf`
+
+   ```bash
+   # Pick ONE, substituting the real month, year, and toFixed(2) amount.
+   filename="Three_UK_Bill_<Month>_<Year>_GBP<Amount>.pdf"   # billAmount was a number
+   # filename="Three_UK_Bill_<Month>_<Year>.pdf"             # billAmount was null
+   ```
+
 2. Move the file:
 
    ```bash
    mkdir -p "<SAVE_LOCATION>"
-   mv /tmp/three_bill_temp.pdf "<SAVE_LOCATION>/Three_UK_Bill_<Month>_<Year>_GBP<Amount>.pdf"
+   mv /tmp/three_bill_temp.pdf "<SAVE_LOCATION>/$filename"
    ```
 
 3. Verify the file exists and is non-zero:
 
    ```bash
-   test -s "<SAVE_LOCATION>/Three_UK_Bill_<Month>_<Year>_GBP<Amount>.pdf"
+   test -s "<SAVE_LOCATION>/$filename"
    ```
 
 ### 7. Diagnostic capture on failure
@@ -265,8 +440,10 @@ If any contract assertion in step 4 or 5 returned an `error:` shape (or `ERROR:.
 2. Take a screenshot to `/tmp/three-skill-diag-${TS}.png`.
 3. Use `list_network_requests` (filter `resourceTypes: ["fetch","xhr"]`),
    redact sensitive fields, and dump the sanitised result to
-   `/tmp/three-skill-diag-${TS}.json` via `evaluate_script`'s `filePath`
-   (return the filtered list as JSON-stringified text). Redaction rules:
+   `<PROJECT_DIR>/.three-skill-diag-${TS}.json` via `evaluate_script`'s
+   `filePath` (return the filtered list as JSON-stringified text). It must be
+   a workspace-root path, not `/tmp`: `filePath` is sandboxed (see step 5).
+   Redaction rules:
    - Replace any `authorization`, `uxfauthorization`, `cookie`, and
      `set-cookie` header values with the literal string `"<redacted>"`.
    - Replace the numeric customer ID segment in any `/customer/<id>` URL
@@ -280,9 +457,16 @@ If any contract assertion in step 4 or 5 returned an `error:` shape (or `ERROR:.
 
 1. Use the Read tool to view the downloaded PDF (pages "1-3"). If the Read tool cannot render the PDF, fall back to `pdftotext <file> -` via Bash.
 2. Check:
-   - **Month match**: The billing period text matches the requested month.
-   - **Amount visible**: A total or payment amount is present (positive GBP value).
-   - **Valid bill indicators**: Three UK branding, an account number, VAT.
+   - **Month match**: The PDF shows `Bill date 24 <Mon> <YY>` and
+     `Your bill period Up to 23 <Mon> <YY>` for the requested month. This is
+     the authoritative check that the `month` field was mapped correctly
+     (see step 4). Confirm it rather than trusting the API label.
+   - **Amount visible**: `Total charges after VAT` matches the `billAmount`
+     used in the filename. If `billAmount` was `null`, there is nothing to
+     compare against: read the total off the PDF, report it, and flag that the
+     API did not supply a usable amount.
+   - **Account match**: `Your account number` equals the `cuid` from step 3.
+   - **Valid bill indicators**: Hutchison 3G UK Ltd, a VAT reg. no., a due date.
 3. Report a summary:
    - File saved to: `<full path>`
    - Billing period: `<month/year>`
@@ -298,7 +482,11 @@ If verification fails, warn the user with specifics but keep the file.
 | MCP Chrome won't start (stale lock) | Clean up `~/.cache/chrome-devtools-mcp/chrome-profile/SingletonLock` per Prerequisites |
 | Not logged in | Navigate to login page, ask user to log in, wait with 120s timeout |
 | Cookie banner blocking | Click accept/dismiss, continue |
-| `_tms_persistUser` cookie missing | Fall back to network-log inspection for `/care/v1/B2C/customer/<id>` |
+| `persistor_missing` / `no_cuid_in_store` / cuid reads as `"undefined"` | You are on `/customer-logged`, not `/account`. Load the dashboard (step 2.8), then retry; else use the step 3 fallbacks |
+| `session_not_authenticated` / `auth_check_failed` / `auth_check_unparseable` | Auth0 logged in but My3 did not, or the check response was malformed. Ask the user to log in again; do not proceed. Only `isAnonymous === false` counts as authenticated |
+| `placeholder_not_replaced:<field>` | A `REPLACE_WITH_*` literal was left in the snippet. Substitute the real value and re-run; this is an operator error, not an API failure |
+| `invalid_identifier:<field>` | An identifier is not digit-only. Do not build a URL from it. Re-resolve it from step 3 or 4 |
+| Killing MCP Chrome mid-login | Drops the My3 session while leaving Auth0 cookies. Re-login before retrying |
 | Seed endpoint 401/403 | Session expired mid-run; ask user to re-login, retry once |
 | Seed endpoint 404 or 5xx | "Three API may have moved". Run step 7 (diagnostic capture), point at `references/three-api-endpoints.md` |
 | `uxfauthorization` header missing | Same as above |

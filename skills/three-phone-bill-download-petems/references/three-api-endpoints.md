@@ -1,6 +1,6 @@
 # Three UK My3 API (frozen snapshot)
 
-**Last verified: 2026-05-17** against a personal account on `www.three.co.uk`.
+**Last verified: 2026-07-27** against a personal account on `www.three.co.uk`.
 
 This file is the contract the skill depends on. When the skill breaks, regenerate this file by running the skill in DevTools, watching the network panel, and updating both this file and `SKILL.md` step 4/5 together.
 
@@ -8,9 +8,12 @@ This file is the contract the skill depends on. When the skill breaks, regenerat
 
 | Name | Where it comes from | Notes |
 | --- | --- | --- |
-| `cuid` (customer ID) | `_tms_persistUser` cookie, `cuid` field | Not HttpOnly, JS-readable. URL-decode then JSON-parse. |
-| `billId` (billing arrangement ID) | Seed response, `financialAccount.id` (or `billingArrangement.id`) | For personal accounts equals `cuid`. Do not hardcode that; read it from the seed response. |
-| `billNumber` | List response, `bills[i].data.billNumber` | Short 3-digit suffix (e.g. `113`). Per-account, monotonically increasing. |
+| `cuid` (customer ID) | `sessionStorage["persist:customerProfilePersistor"]`, `customerId` field | redux-persist double-encodes: parse the outer JSON, then parse the `customerId` value again. Only populated once `/account` has loaded. Equals the "Account Number" on the dashboard. |
+| `billId` (billing arrangement ID) | Seed response, `customer.financialAccount[0].id` | For personal accounts equals `cuid`. Do not hardcode that; read it from the seed response. |
+| `billNumber` | List response, `bills[i].data.billNumber` | Short 3-digit suffix (e.g. `116`). Per-account, monotonically increasing. The PDF prints it as `<cuid><billNumber>`. |
+
+**Not** `_tms_persistUser`. That cookie's value is the literal string `false`
+(a remember-me flag) and has never contained a `cuid`.
 
 ## Auth
 
@@ -41,7 +44,13 @@ GET https://www.three.co.uk/rp-server-b2c/care/v1/B2C/customer/{cuid}
 
 #### Seed: response body fields we read
 
-- `financialAccount.id` (or `billingArrangement.id`): the `billId`.
+Top-level keys observed: `customer`, `collectionStatus`,
+`equinitiCustomerIndicator`. Everything useful is nested under `customer`:
+
+- `customer.financialAccount[0].id`: the `billId`. Note `financialAccount` is
+  an **array**, and it is `[]` in the redux store even when the API returns it.
+- `customer.id`: the customer ID (matches `cuid`).
+- `customer.owningIndividual.id`: a separate individual ID, not used here.
 
 ### List bills
 
@@ -60,21 +69,45 @@ GET https://www.three.co.uk/rp-server-b2c/ebill/v1/customer/{cuid}/billing-arran
 {
   "bills": [
     {
-      "month": 3,                 // 0-indexed (0=Jan, 11=Dec)
+      // NOT a calendar month. This is a billing-period counter and always
+      // equals data.billPeriod. The entry below is the JULY 2026 bill.
+      "month": 5,
       "year": 2026,
+      "billStartDate": "2026-06-24T00:00:00Z",
+      "slimInd": false,
       "data": {
-        "billNumber": "113",
-        "billAmount": "45.99",
-        "billCloseDate": "...",
-        "billStartDate": "...",
-        "billEndDate": "...",
-        "paymentDueDate": "..."
+        "billNumber": "116",
+        "billAmount": 33.08,      // a number, not a string
+        "billPeriod": 5,
+        "billCloseDate": "2026-07-24T00:00:00Z",   // derive the month from this
+        "billStartDate": "2026-06-24T00:00:00Z",
+        "billEndDate": "2026-07-23T00:00:00Z",
+        "paymentDueDate": "2026-08-12T00:00:00Z",
+        "currency": "GBP",
+        "totalTaxAmount": 5.51,
+        "totalChargesBeforeTax": 27.57,
+        "prevMonth": { "previousBillAmount": 41.69, /* ... */ }
       }
     },
     // ...
   ]
 }
 ```
+
+The list is returned newest-first, but sort by `billCloseDate` rather than
+relying on that.
+
+#### Month mapping
+
+A bill closing on the 24th covers the 24th of the previous month to the 23rd
+of the close month. "My July bill" means the bill *issued* in July:
+`billCloseDate` = 24 Jul, `billEndDate` = 23 Jul. Observed on this account:
+
+| `month` | `billCloseDate` | Calendar label | `billNumber` | Amount |
+| --- | --- | --- | --- | --- |
+| 5 | 2026-07-24 | July 2026 | 116 | £33.08 |
+| 4 | 2026-06-24 | June 2026 | 115 | £41.69 |
+| 3 | 2026-05-24 | May 2026 | 114 | £33.08 |
 
 #### List bills: response headers we re-read
 
@@ -102,8 +135,22 @@ Note the path prefix is `/care/v1/`, **not** `/ebill/v1/`.
 
 Sanity-check values from this account only:
 
+- July 2026 bill (billNumber 116): 1,196,342 bytes, 4 pages
 - April 2026 bill: 1,192,590 bytes
 - March 2026 bill: 1,190,524 bytes
+
+## MCP tool constraints
+
+Not API behaviour, but these break the skill just as effectively:
+
+- `evaluate_script` `args` accepts **element uids from a snapshot only**.
+  Passing a `cuid` string fails with "No snapshot found for page". Inline
+  values as literals in the function body.
+- `evaluate_script` `filePath` is sandboxed to the configured workspace roots.
+  `/tmp` is rejected. Write inside the project directory.
+- `filePath` output is JSON-encoded and the extension is normalised to
+  `.json`. A returned base64 string arrives wrapped in `"` quotes; strip them
+  before `base64 -d`.
 
 ## Update procedure
 
