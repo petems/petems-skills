@@ -1,9 +1,9 @@
 # petems Personal Preferences
 
 > These are conventions in the `git-commit-and-push-petems` skill that go beyond
-> (or differ from) what the Conventional Commits spec, the Sparkbox article,
-> and the Karma convention prescribe. They reflect Peter's personal workflow
-> preferences.
+> (or differ from) what the Conventional Commits spec, the Conventional Branch
+> spec, the Sparkbox article, and the Karma convention prescribe. They reflect
+> Peter's personal workflow preferences.
 
 ## Commit title: 50-character limit
 
@@ -45,9 +45,29 @@ workflow preference, not something any of the specs address.
 
 ## Semantic branch naming
 
-Branch naming (`<type>/#<issueNumber>-<alias>`) is entirely outside the scope of
-all three commit message specs. This is a petems convention for keeping branch
-names consistent with commit types.
+The Conventional Branch spec defines `feature`/`feat`, `bugfix`/`fix`,
+`hotfix`, `release`, and `chore` as the canonical prefixes. Peter accepts a
+**superset** of those prefixes so branch types stay aligned with the
+commit-type list used in this skill: `feat`, `feature`, `fix`, `bugfix`,
+`hotfix`, `release`, `docs`, `style`, `refactor`, `perf`, `test`, `build`,
+`ci`, `chore`, `revert`. Beyond the type list, the petems format also
+encodes a ticket reference where one exists: `<type>/#<issueNumber>-<alias>`.
+
+## Active branch-name validation (not just documentation)
+
+The Conventional Branch spec describes the format but does not prescribe
+*when* it should be enforced. Peter requires the skill to **actively
+validate** the current branch name before committing:
+
+- On the trunk branch (`master`/`main`/`develop`): create a new feature
+  branch.
+- On a non-trunk branch whose name does **not** match the convention: create
+  a new conformant branch off the current branch's HEAD (preserving the work
+  already there) and continue on it. The non-conforming ref is left in
+  place; it can be cleaned up later.
+- On a non-trunk branch whose name **does** match the convention: proceed.
+
+This is a workflow safeguard, not part of any upstream spec.
 
 ## Imperative mood: origin note
 
