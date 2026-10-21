@@ -17,6 +17,7 @@ This skill builds on established commit message conventions with petems-specific
 Read these files when you need deeper context on the reasoning behind a rule:
 
 - For the Conventional Commits v1 spec: read `${CLAUDE_SKILL_DIR}/references/conventional-commits-v1.md`
+- For the Conventional Branch spec (branch-naming rules): read `${CLAUDE_SKILL_DIR}/references/conventional-branch.md`
 - For the Karma runner commit convention (the original inspiration): read `${CLAUDE_SKILL_DIR}/references/karma-commit-message-convention.md`
 - For the Sparkbox semantic commit style: read `${CLAUDE_SKILL_DIR}/references/sparkbox-semantic-commit-messages.md`
 - For petems-specific preferences that go beyond the specs: read `${CLAUDE_SKILL_DIR}/references/petems-preferences.md`
@@ -27,7 +28,7 @@ Read these files when you need deeper context on the reasoning behind a rule:
 - NEVER run destructive git commands (push --force, reset --hard, checkout ., restore ., clean -f, branch -D) unless the user explicitly requests these actions
 - NEVER skip hooks (--no-verify, --no-gpg-sign, etc) unless the user explicitly requests it
 - NEVER force push to main/master, warn the user if they request it
-- NEVER commit directly to the trunk branch (master or main). Always create a feature branch first. Detect the trunk branch using the method described in Step 2 below.
+- NEVER commit directly to the trunk branch (`master`, `main`, or `develop`). Always create a feature branch first. Detect the trunk branch using the method described in Step 2 below.
 - CRITICAL: Always create NEW commits rather than amending, unless the user explicitly requests a git amend. When a pre-commit hook fails, the commit did NOT happen, so --amend would modify the PREVIOUS commit. Instead, after hook failure, fix the issue, re-stage, and create a NEW commit
 - When staging files, prefer adding specific files by name rather than using `git add -A` or `git add .`, which can accidentally include sensitive files (.env, credentials) or large binaries
 - NEVER commit changes unless the user explicitly asks you to
@@ -43,47 +44,91 @@ Run the following bash commands in parallel to understand the current state:
 - `git diff` and `git diff --staged` — see both staged and unstaged changes.
 - `git log --oneline -10` — see recent commit messages for style reference.
 - Detect the trunk branch name:
+
   ```bash
   git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@'
   ```
-  If that returns nothing (no remote HEAD configured), fall back to checking which of `master` or `main` exists as a local branch. Prefer `master` if both exist.
+
+  If that returns nothing (no remote HEAD configured), fall back to checking which of `master` or `main` exists as a local branch (prefer `master` if both exist), and only use `develop` if neither exists.
+  Per the Conventional Branch spec, treat `master`, `main`, and `develop` collectively as long-lived "trunk-like" branches that should not receive direct commits.
 - `git branch --show-current` — get the current branch name.
 
-### 2. Ensure you are on a feature branch
+### 2. Ensure you are on a properly named feature branch
 
-Compare the current branch against the detected trunk branch.
+Compare the current branch against the detected trunk branch and the trunk-like names, then validate the branch name. There are four cases:
 
-- **If on the detected trunk branch**: you MUST create a feature branch before committing.
+- **If on the detected trunk branch, or on any of `master`, `main`, or `develop`**: you MUST create a feature branch before committing.
   - Derive the branch name using the naming convention below.
   - Run `git checkout -b <branch-name>`.
   - Inform the user: "Created branch `<branch-name>` to avoid committing directly to `<trunk>`."
-- **If already on a feature branch**: proceed to the next step.
+- **If `git branch --show-current` is empty (detached HEAD)**: stop and ask the user which branch to commit on. Do not create one silently.
+- **If on a non-trunk branch whose name does NOT match the validation pattern below**: do NOT silently commit on the non-conforming branch.
+  - First check whether it tracks a remote: `git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null`.
+    If it does, the branch may already have an open PR, and moving to a new branch would leave that PR behind. Ask the user whether to keep committing on `<old>` or switch to a conformant branch, and follow their answer.
+  - Otherwise (local-only branch):
+    - Derive a conformant name using the naming convention below, based on the staged/unstaged changes you saw in Step 1.
+    - Run `git checkout -b <new-name>` to create the new branch off the current HEAD. This preserves any commits already made on the old branch, since `git checkout -b` only creates a new ref at the same commit and leaves the old ref in place.
+    - Inform the user: "Current branch `<old>` does not follow the convention. Created `<new>` off `<old>`; the old branch ref is left in place so you can clean it up later."
+- **If on a non-trunk branch whose name matches the validation pattern**: proceed to the next step.
+
+#### Branch name validation pattern
+
+A branch name is valid if it matches this pattern (extended POSIX regex, usable with `grep -E`):
+
+```regex
+^(feat|feature|fix|bugfix|hotfix|release|docs|style|refactor|perf|test|build|ci|chore|revert)/[a-z0-9]+([./-][a-z0-9]+)*$
+```
+
+In prose:
+
+- The name must start with one of the allowed type prefixes followed by `/`.
+- The description after the `/` is one or more "runs" of `[a-z0-9]` separated by a single hyphen (`-`), dot (`.`), or forward slash (`/`).
+- Uppercase letters and underscores (`_`) are not allowed anywhere.
+- Consecutive separators (`--`, `..`, `//`) are not allowed.
+- The description cannot start or end with a separator (those positions must be `[a-z0-9]`).
+- Single-character descriptions are valid (e.g. `fix/x`).
+
+To validate the current branch from bash:
+
+```bash
+git branch --show-current | grep -Eq '^(feat|feature|fix|bugfix|hotfix|release|docs|style|refactor|perf|test|build|ci|chore|revert)/[a-z0-9]+([./-][a-z0-9]+)*$'
+```
+
+This pattern is the union of the petems commit-type list and the Conventional Branch canonical types. See `${CLAUDE_SKILL_DIR}/references/conventional-branch.md` for the upstream spec.
 
 #### Branch naming convention
 
 When creating a new branch, use the following pattern:
 
 ```text
-<type>/#<issueNumber>-<alias>
+<type>/<issueNumber>-<alias>
   |         |           |
   |         |           +---> Summary in kebab-case.
   |         +--------------> Reference to the issue/ticket.
-  +------------------------> Type: feat, fix, docs, style, refactor, test, or chore.
+  +------------------------> Type: feat, feature, fix, bugfix, hotfix,
+                              release, docs, style, refactor, perf, test,
+                              build, ci, chore, or revert.
 ```
 
-When there is no issue number, use a short slug, e.g. `feat/add-oauth-login`, `fix/null-pointer-in-parser`, `refactor/extract-auth-middleware`.
+Do not put `#` in the issue reference (e.g. use `feat/123-add-oauth-login`, not `feat/#123-add-oauth-login`); `#` fails the validation pattern above. When there is no issue number, use a short slug, e.g. `feat/add-oauth-login`, `fix/null-pointer-in-parser`, `refactor/extract-auth-middleware`.
 
 | Prefix               | Purpose                                      |
 |----------------------|----------------------------------------------|
-| `feat` or `feature` | New feature                                  |
-| `fix`                | Bug fix                                      |
+| `feat` or `feature`  | New feature                                  |
+| `fix` or `bugfix`    | Bug fix                                      |
+| `hotfix`             | Urgent production fix                        |
+| `release`            | Release prep, e.g. `release/v1.2.0`          |
 | `docs`               | Documentation only                           |
 | `style`              | Formatting, missing semicolons, etc.         |
 | `refactor`           | Code change that neither fixes nor adds      |
+| `perf`               | Performance improvement                      |
 | `test`               | Adding or updating tests                     |
-| `chore`              | Maintenance (deps, CI, build, etc.)          |
+| `build`              | Build system or external dependency changes  |
+| `ci`                 | CI configuration changes                     |
+| `chore`              | Maintenance (deps, tooling, etc.)            |
+| `revert`             | Revert a prior commit                        |
 
-> Reference: <https://gist.github.com/seunggabi/87f8c722d35cd07deb3f649d45a31082>
+> References: <https://conventional-branch.github.io/>, <https://gist.github.com/seunggabi/87f8c722d35cd07deb3f649d45a31082>
 
 ### 3. Draft the commit message
 
