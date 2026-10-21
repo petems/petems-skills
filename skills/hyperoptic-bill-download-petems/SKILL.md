@@ -109,17 +109,19 @@ The month names are the way into each bill's own page. The amount for the filena
    touch /tmp/hyperoptic_marker
    ```
 
-2. Click the **"Download PDF bill"** button. Chrome saves the file straight to `~/Downloads/` as `Invoice-<INVOICE_ID>.pdf`.
-3. Poll for up to 30 seconds until the file appears and is not a partial download:
+2. Click the **"Download PDF bill"** button. Chrome saves the file straight to `~/Downloads/` as `Invoice-<INVOICE_ID>.pdf`. If a file with that name already exists, Chrome adds a suffix such as `Invoice-<INVOICE_ID> (1).pdf`.
+3. Poll for up to 30 seconds for a non-empty file matching this invoice ID, so unrelated downloads are ignored:
 
    ```bash
    for i in $(seq 1 15); do
-     f=$(find ~/Downloads -maxdepth 1 -newer /tmp/hyperoptic_marker -type f ! -name '*.crdownload' | head -1)
-     [ -n "$f" ] && { ls -la "$f"; exit 0; }
+     f=$(find ~/Downloads -maxdepth 1 -newer /tmp/hyperoptic_marker -type f -size +0 -name 'Invoice-<INVOICE_ID>*.pdf' | head -1)
+     [ -n "$f" ] && { echo "$f"; exit 0; }
      sleep 2
    done
    echo "no new file"
    ```
+
+4. Record the exact path the poll printed as `<DOWNLOADED_PATH>`. Use that path in Step 6, not a reconstructed name.
 
 **Fallback**: If no file appears or it is 0 bytes:
 
@@ -133,14 +135,25 @@ The month names are the way into each bill's own page. The amount for the filena
 1. Construct the filename: `Hyperoptic_Bill_<Month>_<Year>_GBP<Amount>.pdf`
    - Example: `Hyperoptic_Bill_March_2026_GBP53.00.pdf`
    - If the amount is unknown, omit it: `Hyperoptic_Bill_March_2026.pdf`
-2. Move from `~/Downloads/` to the save location. Use `mv -n` so an existing bill with the same name is never overwritten:
+2. Check whether the destination already exists:
+
+   ```bash
+   test -e "<SAVE_LOCATION>/Hyperoptic_Bill_<Month>_<Year>_GBP<Amount>.pdf" && echo exists
+   ```
+
+   If it exists, stop and ask the user whether to overwrite it, save the new download with a suffix (e.g. `_2`), or keep the existing file and leave the new download at `<DOWNLOADED_PATH>`. Never report the existing file as the new download.
+3. Move the downloaded file:
 
    ```bash
    mkdir -p "<SAVE_LOCATION>"
-   mv -n ~/Downloads/Invoice-<INVOICE_ID>.pdf "<SAVE_LOCATION>/Hyperoptic_Bill_<Month>_<Year>_GBP<Amount>.pdf"
+   mv -n "<DOWNLOADED_PATH>" "<SAVE_LOCATION>/Hyperoptic_Bill_<Month>_<Year>_GBP<Amount>.pdf"
    ```
 
-3. Verify: `test -s "<SAVE_LOCATION>/Hyperoptic_Bill_<Month>_<Year>_GBP<Amount>.pdf"`
+4. Verify the move actually happened (source gone, destination non-empty):
+
+   ```bash
+   test ! -e "<DOWNLOADED_PATH>" && test -s "<SAVE_LOCATION>/Hyperoptic_Bill_<Month>_<Year>_GBP<Amount>.pdf"
+   ```
 
 ### 7. Verify the PDF
 
