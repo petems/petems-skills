@@ -44,24 +44,31 @@ Run the following bash commands in parallel to understand the current state:
 - `git diff` and `git diff --staged` — see both staged and unstaged changes.
 - `git log --oneline -10` — see recent commit messages for style reference.
 - Detect the trunk branch name:
+
   ```bash
   git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@'
   ```
-  If that returns nothing (no remote HEAD configured), fall back to checking which of `master`, `main`, or `develop` exists as a local branch. Prefer `master` if both `master` and `main` exist. Per the Conventional Branch spec, treat `master`, `main`, and `develop` collectively as long-lived "trunk-like" branches that should not receive direct commits.
+
+  If that returns nothing (no remote HEAD configured), fall back to checking which of `master` or `main` exists as a local branch (prefer `master` if both exist), and only use `develop` if neither exists.
+  Per the Conventional Branch spec, treat `master`, `main`, and `develop` collectively as long-lived "trunk-like" branches that should not receive direct commits.
 - `git branch --show-current` — get the current branch name.
 
 ### 2. Ensure you are on a properly named feature branch
 
-Compare the current branch against the detected trunk branch, then validate the branch name. There are three cases:
+Compare the current branch against the detected trunk branch and the trunk-like names, then validate the branch name. There are four cases:
 
-- **If on the detected trunk branch** (`master`, `main`, or `develop`): you MUST create a feature branch before committing.
+- **If on the detected trunk branch, or on any of `master`, `main`, or `develop`**: you MUST create a feature branch before committing.
   - Derive the branch name using the naming convention below.
   - Run `git checkout -b <branch-name>`.
   - Inform the user: "Created branch `<branch-name>` to avoid committing directly to `<trunk>`."
-- **If on a non-trunk branch whose name does NOT match the validation pattern below**: do NOT silently commit on the non-conforming branch. Instead:
-  - Derive a conformant name using the naming convention below, based on the staged/unstaged changes you saw in Step 1.
-  - Run `git checkout -b <new-name>` to create the new branch off the current HEAD. This preserves any commits already made on the old branch, since `git checkout -b` only creates a new ref at the same commit and leaves the old ref in place.
-  - Inform the user: "Current branch `<old>` does not follow the convention. Created `<new>` off `<old>`; the old branch ref is left in place so you can clean it up later."
+- **If `git branch --show-current` is empty (detached HEAD)**: stop and ask the user which branch to commit on. Do not create one silently.
+- **If on a non-trunk branch whose name does NOT match the validation pattern below**: do NOT silently commit on the non-conforming branch.
+  - First check whether it tracks a remote: `git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null`.
+    If it does, the branch may already have an open PR, and moving to a new branch would leave that PR behind. Ask the user whether to keep committing on `<old>` or switch to a conformant branch, and follow their answer.
+  - Otherwise (local-only branch):
+    - Derive a conformant name using the naming convention below, based on the staged/unstaged changes you saw in Step 1.
+    - Run `git checkout -b <new-name>` to create the new branch off the current HEAD. This preserves any commits already made on the old branch, since `git checkout -b` only creates a new ref at the same commit and leaves the old ref in place.
+    - Inform the user: "Current branch `<old>` does not follow the convention. Created `<new>` off `<old>`; the old branch ref is left in place so you can clean it up later."
 - **If on a non-trunk branch whose name matches the validation pattern**: proceed to the next step.
 
 #### Branch name validation pattern
@@ -69,7 +76,7 @@ Compare the current branch against the detected trunk branch, then validate the 
 A branch name is valid if it matches this pattern (extended POSIX regex, usable with `grep -E`):
 
 ```regex
-^(feat|feature|fix|bugfix|hotfix|release|docs|style|refactor|perf|test|build|ci|chore|revert)\/[a-z0-9]+([.\/-][a-z0-9]+)*$
+^(feat|feature|fix|bugfix|hotfix|release|docs|style|refactor|perf|test|build|ci|chore|revert)/[a-z0-9]+([./-][a-z0-9]+)*$
 ```
 
 In prose:
@@ -84,7 +91,7 @@ In prose:
 To validate the current branch from bash:
 
 ```bash
-git branch --show-current | grep -Eq '^(feat|feature|fix|bugfix|hotfix|release|docs|style|refactor|perf|test|build|ci|chore|revert)\/[a-z0-9]+([.\/-][a-z0-9]+)*$'
+git branch --show-current | grep -Eq '^(feat|feature|fix|bugfix|hotfix|release|docs|style|refactor|perf|test|build|ci|chore|revert)/[a-z0-9]+([./-][a-z0-9]+)*$'
 ```
 
 This pattern is the union of the petems commit-type list and the Conventional Branch canonical types. See `${CLAUDE_SKILL_DIR}/references/conventional-branch.md` for the upstream spec.
@@ -94,7 +101,7 @@ This pattern is the union of the petems commit-type list and the Conventional Br
 When creating a new branch, use the following pattern:
 
 ```text
-<type>/#<issueNumber>-<alias>
+<type>/<issueNumber>-<alias>
   |         |           |
   |         |           +---> Summary in kebab-case.
   |         +--------------> Reference to the issue/ticket.
@@ -103,14 +110,14 @@ When creating a new branch, use the following pattern:
                               build, ci, chore, or revert.
 ```
 
-When there is no issue number, use a short slug, e.g. `feat/add-oauth-login`, `fix/null-pointer-in-parser`, `refactor/extract-auth-middleware`.
+Do not put `#` in the issue reference (e.g. use `feat/123-add-oauth-login`, not `feat/#123-add-oauth-login`); `#` fails the validation pattern above. When there is no issue number, use a short slug, e.g. `feat/add-oauth-login`, `fix/null-pointer-in-parser`, `refactor/extract-auth-middleware`.
 
 | Prefix               | Purpose                                      |
 |----------------------|----------------------------------------------|
 | `feat` or `feature`  | New feature                                  |
 | `fix` or `bugfix`    | Bug fix                                      |
 | `hotfix`             | Urgent production fix                        |
-| `release`            | Release-preparation branch (e.g. `release/v1.2.0`) |
+| `release`            | Release prep, e.g. `release/v1.2.0`          |
 | `docs`               | Documentation only                           |
 | `style`              | Formatting, missing semicolons, etc.         |
 | `refactor`           | Code change that neither fixes nor adds      |

@@ -51,7 +51,8 @@ The Conventional Branch spec defines `feature`/`feat`, `bugfix`/`fix`,
 commit-type list used in this skill: `feat`, `feature`, `fix`, `bugfix`,
 `hotfix`, `release`, `docs`, `style`, `refactor`, `perf`, `test`, `build`,
 `ci`, `chore`, `revert`. Beyond the type list, the petems format also
-encodes a ticket reference where one exists: `<type>/#<issueNumber>-<alias>`.
+encodes a ticket reference where one exists: `<type>/<issueNumber>-<alias>`
+(no `#`, which the spec's character rules do not allow).
 
 ## Active branch-name validation (not just documentation)
 
@@ -61,9 +62,12 @@ validate** the current branch name before committing:
 
 - On the trunk branch (`master`/`main`/`develop`): create a new feature
   branch.
-- On a non-trunk branch whose name does **not** match the convention: create
-  a new conformant branch off the current branch's HEAD (preserving the work
-  already there) and continue on it. The non-conforming ref is left in
+- On a detached HEAD: ask the user which branch to use.
+- On a non-trunk branch whose name does **not** match the convention and
+  tracks a remote: ask the user first, since it may back an open PR.
+- On a local-only non-trunk branch whose name does **not** match the
+  convention: create a new conformant branch off the current branch's HEAD
+  (preserving the work already there) and continue on it. The non-conforming ref is left in
   place; it can be cleaned up later.
 - On a non-trunk branch whose name **does** match the convention: proceed.
 
