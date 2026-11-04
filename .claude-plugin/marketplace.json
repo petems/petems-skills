@@ -28,6 +28,11 @@
       "description": "Download and verify a Three UK bill PDF via Chrome DevTools"
     },
     {
+      "name": "peloton-invoice-download-petems",
+      "source": "./",
+      "description": "Download and verify Peloton membership invoice PDFs via Chrome DevTools"
+    },
+    {
       "name": "blog-post-writer-petems",
       "source": "./",
       "description": "Transform brain dumps into blog posts in Peter's casual, self-deprecating British voice"

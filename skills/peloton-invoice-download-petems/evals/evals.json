@@ -1,0 +1,47 @@
+{
+  "skill_name": "peloton-invoice-download-petems",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Download my latest Peloton invoice",
+      "expected_output": "Resolves the active AutoDebit subscription via GraphQL, lists pastInvoices, picks the newest, opens the receipt in its own tab, captures it (scripts and handlers stripped, CSP added) and prints it with headless Chrome, verifies date, amount and VAT ID on the unsaved PDF (VERIFY_OK), then resolves the default ~/Desktop/ to an absolute path (no literal ~ directory) and saves Peloton_Invoice_<Month>_<Year>_GBP<Amount>.pdf there. Runs the cleanup command (CLEANUP_OK) and closes the receipt tab. Never returns or prints the bearer token.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Grab my Peloton receipts for August, September and October 2026 and save them to ~/Documents/receipts/",
+      "expected_output": "Matches each month to an invoice ID from the PaymentHistory list, processes them one at a time, saves three PDFs with correct filenames to ~/Documents/receipts/, verifies each one's date and amount",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Download my Peloton invoice for January 2019",
+      "expected_output": "Finds no matching invoice in the PaymentHistory list, shows the available months with amounts, asks the user to pick one. Does not write any file.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "Download my October 2026 Peloton invoice to ~/Documents/Expense Receipts/$fitness (2026)/",
+      "expected_output": "Resolves the save location to an absolute path in step 1 and passes it single-quoted, so the space, $ and parentheses are preserved literally. Creates the directory if needed and saves Peloton_Invoice_October_2026_GBP<Amount>.pdf inside it. No stray ~ or truncated directory is created. Reports CLEANUP_OK.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "Download my latest Peloton invoice (simulate: the receipt page never shows 'Total amount paid')",
+      "expected_output": "wait_for times out, so the skill reports receipt_not_rendered, takes an inline screenshot (no filePath), saves nothing, and runs the cleanup command (CLEANUP_OK) and closes the receipt tab before stopping.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "Download my Peloton receipt for last month (simulate: the only subscription has billingStrategy Apple or Bango)",
+      "expected_output": "Step 3 finds no AutoDebit subscription, explains there is no Peloton invoice, and points the user to the App Store purchase history (Apple) or their mobile carrier / partner bill (Bango). Creates no files.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "Download my Peloton invoice from March 2024 (simulate: an active subscription started in 2025 and an older cancelled AutoDebit subscription covers 2024)",
+      "expected_output": "Does not find March 2024 on the active subscription, re-runs step 4 for the cancelled AutoDebit subscription, finds the invoice there, and opens the receipt using that invoice's own subscriptionId.",
+      "files": []
+    }
+  ]
+}

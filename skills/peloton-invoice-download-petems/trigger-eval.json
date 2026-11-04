@@ -1,0 +1,21 @@
+[
+  {"query": "download my latest peloton invoice to the desktop", "should_trigger": true},
+  {"query": "I need my Peloton membership receipt for October, it's for a fitness reimbursement claim", "should_trigger": true},
+  {"query": "can you get my peloton receipts for the last three months? my wellness allowance needs them", "should_trigger": true},
+  {"query": "grab the peloton all-access invoice and save it to ~/Documents/receipts", "should_trigger": true},
+  {"query": "peloton invoice download please, the september one", "should_trigger": true},
+  {"query": "save a copy of my peloton subscription bill as a pdf", "should_trigger": true},
+  {"query": "fetch my peloton membership bill from account.onepeloton.co.uk", "should_trigger": true},
+  {"query": "i need a PDF of what I paid Peloton last month, about 45 quid", "should_trigger": true},
+  {"query": "/peloton-invoice-download-petems latest", "should_trigger": true},
+  {"query": "how much is my peloton membership per month? just tell me, no download", "should_trigger": false},
+  {"query": "help me pause my Peloton membership for two months", "should_trigger": false},
+  {"query": "download my Hyperoptic broadband bill for march", "should_trigger": false},
+  {"query": "download my Three mobile phone bill", "should_trigger": false},
+  {"query": "find me a 30 minute peloton ride with Ally Love", "should_trigger": false},
+  {"query": "export my peloton workout history to a csv", "should_trigger": false},
+  {"query": "I want to cancel my Peloton subscription", "should_trigger": false},
+  {"query": "submit my peloton receipt to Forma as a fitness claim", "should_trigger": false},
+  {"query": "write a python script using the peloton API to pull my ride stats", "should_trigger": false},
+  {"query": "download my gym membership invoice from PureGym", "should_trigger": false}
+]
