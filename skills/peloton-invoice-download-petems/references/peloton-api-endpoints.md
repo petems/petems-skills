@@ -146,6 +146,13 @@ extractable with `pdftotext`. A blank render is 872 bytes.
 
 - `evaluate_script` `args` accepts element uids only. Inline values as literals.
 - `evaluate_script` `filePath` output is JSON-encoded. Decode with `json.load` before use.
+- `evaluate_script` `filePath` and `sourcePath` are sandboxed to the workspace
+  roots (`/tmp` is rejected for `sourcePath`; `filePath` behaves the same per the
+  Three skill). The receipt capture therefore usually lands in the project
+  directory, which is why the skill moves it to `/tmp` immediately and cleans up
+  on every exit path.
+- A `~` inside double quotes is not expanded by the shell. Resolve save paths
+  to absolute before building commands.
 - `get_network_request` prints full request headers, including the bearer token
   and cookies. Avoid it on authenticated Peloton requests.
 - The MCP Chrome runs with `--remote-debugging-pipe`, so there is no CDP port

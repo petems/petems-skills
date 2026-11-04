@@ -67,8 +67,39 @@ page's `localStorage`. Treat it as a secret:
 - Do **not** call `get_network_request` on `graph.prod.k8s.onepeloton.com` or
   `api.onepeloton.com` requests. Its output prints the `authorization` header
   and every cookie in full.
-- The captured receipt HTML holds the user's name and billing address. Write it
-  to a `mktemp` directory and delete it once the PDF is verified.
+
+## Temporary files and cleanup
+
+The captured receipt holds the user's name and billing address. Every
+temporary file the skill creates lives in one of two places:
+
+| Placeholder | What | Where |
+| --- | --- | --- |
+| `<WORK>` | Decoded HTML and the unrenamed PDF | `mktemp -d /tmp/peloton_invoice.XXXXXX` (created in step 6) |
+| `<CAPTURE>` | Raw `evaluate_script` output, only if `<WORK>` is rejected | `<PROJECT_DIR>/.peloton_receipt_<RAND>.json`, moved into `<WORK>` immediately |
+
+`<PROJECT_DIR>` is the current working directory (`pwd`), and `<RAND>` is the
+random suffix of `<WORK>` (the part after `peloton_invoice.`).
+
+**Run the cleanup command on every exit path**: after a successful save, after
+a verification failure, after any `error` result or diagnostic capture, when
+the user aborts, and before ending your turn for any other reason. Do not leave
+a receipt behind because a later step failed.
+
+```bash
+rm -rf "<WORK>"
+find "<PROJECT_DIR>" -maxdepth 1 -name '.peloton_receipt_*' -exec rm -f {} +
+if find "<PROJECT_DIR>" -maxdepth 1 -name '.peloton_receipt_*' | grep -q . || [ -e "<WORK>" ]; then
+  echo CLEANUP_INCOMPLETE
+else
+  echo CLEANUP_OK
+fi
+```
+
+Use `find`, not a glob such as `rm -f .peloton_receipt_*`: in zsh an unmatched
+glob is an error, so the `rm` never runs. If `<WORK>` was never created, skip
+the `rm -rf` line but still run the `find` lines. If the output is
+`CLEANUP_INCOMPLETE`, tell the user which file is left over.
 
 ## Steps
 
@@ -78,6 +109,20 @@ Determine:
 
 - **Target month(s)**: Which invoice(s) to download. Default to the latest if not specified. Multiple months are supported (process them one at a time).
 - **Save location**: Where to save the PDF(s). Default to `~/Desktop/` if not specified.
+
+Resolve the save location to an absolute path now, and record the result as
+`<SAVE_DIR>`. Never put `~` inside quotes in a later command: the shell does
+not expand a quoted tilde, so `mkdir -p "~/Desktop"` creates a literal `~`
+directory under the current directory.
+
+```bash
+python3 -I -c 'import os,sys; print(os.path.realpath(os.path.expanduser(sys.argv[1])))' '<RAW_SAVE_LOCATION>'
+```
+
+- Put the user's text inside the single quotes as-is. If it contains a single
+  quote or a newline, do not run the command: ask the user for a different path.
+- The printed path is `<SAVE_DIR>` (for the default, e.g. `/Users/<name>/Desktop`).
+  Spaces and other characters are fine, because every later command passes it in single quotes.
 
 **Billing cycle note**: Peloton charges monthly on the membership renewal
 date, which is fixed per account (shown as "Renews DD/MM/YYYY" on the
@@ -279,13 +324,18 @@ The DevTools MCP has no print-to-PDF tool, and its Chrome only exposes a
 debugging pipe, not a port. So capture the rendered HTML from the page and
 print it with a separate headless Chrome.
 
-1. Create a private working directory and record its path as `<WORK>`:
+1. Create a private working directory. Record the first line as `<WORK>` and
+   the second as `<PROJECT_DIR>` (see "Temporary files and cleanup"):
 
    ```bash
-   mktemp -d /tmp/peloton_invoice.XXXXXX
+   mktemp -d /tmp/peloton_invoice.XXXXXX && pwd
    ```
 
 2. Call `evaluate_script` with `filePath: "<WORK>/receipt.json"` and this function.
+   The MCP usually rejects paths outside the workspace roots (as it does for
+   `/tmp`). If it does, call it again with
+   `filePath: "<PROJECT_DIR>/.peloton_receipt_<RAND>.json"`. That is `<CAPTURE>`,
+   and step 3 moves it out of the project straight away.
    It copies all CSS inline and strips scripts, iframes, trackers, and the
    cookie banner, so the offline copy renders without any JavaScript.
 
@@ -309,14 +359,15 @@ print it with a separate headless Chrome.
    ```
 
    `filePath` output is a **JSON-encoded string**, and the tool may normalise
-   the extension to `.json`. Use the path the tool reports.
-   If `filePath` is rejected as outside the workspace roots, use a dot-file in
-   the current project directory instead (e.g. `.peloton_receipt.json`) and
-   delete it in step 9.
+   the extension to `.json`. Use the path the tool reports as `<SAVED_PATH>`.
 
-3. Decode the JSON to HTML, then print:
+3. In **one** Bash call, move the capture into `<WORK>` (a no-op if it is
+   already there), decode it to HTML, and print. Keeping the `mv` in the same
+   call means a receipt written into the project is gone before anything else
+   can fail:
 
    ```bash
+   [ "<SAVED_PATH>" = "<WORK>/receipt.json" ] || mv -f "<SAVED_PATH>" "<WORK>/receipt.json" || echo "CAPTURE_MOVE_FAILED"
    python3 -I -c 'import json,sys; open(sys.argv[2],"w").write(json.load(open(sys.argv[1])))' "<WORK>/receipt.json" "<WORK>/receipt.html"
    grep -q '<body' "<WORK>/receipt.html" || echo "BODY_MISSING"
 
@@ -336,46 +387,62 @@ print it with a separate headless Chrome.
    - Expect `bytes written` in the output. A PDF under ~20 KB (the blank-page
      result was 872 bytes) means the receipt did not render. Check for
      `BODY_MISSING` and see step 8.
+   - On `CAPTURE_MOVE_FAILED`, stop and run the cleanup command. It deletes the
+     project-directory copy.
    - Chrome logs harmless `CVDisplayLinkCreateWithCGDisplay failed` errors on macOS. Ignore them.
 
 ### 7. Rename and move the file
 
-1. Build the filename once and bind it to a variable:
+1. Pick the filename:
    - With an amount: `Peloton_Invoice_October_2026_GBP45.00.pdf`
    - If `amount` is `null`: `Peloton_Invoice_October_2026.pdf`
    - If a month has more than one invoice, append the first 8 characters of
      the invoice ID: `Peloton_Invoice_October_2026_GBP45.00_a1b2c3d4.pdf`
 
-   ```bash
-   filename="Peloton_Invoice_<Month>_<Year>_GBP<Amount>.pdf"
-   ```
+   Every part comes from values that passed the step 4 guards (month name,
+   4-digit year, `\d+\.\d{2}` amount, hex ID), so the name is shell-safe.
 
-2. Check whether the destination already exists:
-
-   ```bash
-   test -e "<SAVE_LOCATION>/$filename" && echo exists
-   ```
-
-   If it exists, ask the user whether to overwrite, save with a suffix (e.g. `_2`), or skip. Never report the existing file as the new download.
-
-3. Move and verify:
+2. Run the check, move, and verify as **one** Bash call. Shell variables do not
+   persist between separate tool calls, so splitting this up leaves `$dest`
+   empty in the later commands. `<SAVE_DIR>` is the absolute path from step 1,
+   in single quotes; never substitute a `~` path here.
 
    ```bash
-   mkdir -p "<SAVE_LOCATION>"
-   mv -n "<WORK>/receipt.pdf" "<SAVE_LOCATION>/$filename"
-   test ! -e "<WORK>/receipt.pdf" && test -s "<SAVE_LOCATION>/$filename"
+   SAVE_DIR='<SAVE_DIR>'
+   filename='Peloton_Invoice_<Month>_<Year>_GBP<Amount>.pdf'
+   dest="$SAVE_DIR/$filename"
+   if [ "${SAVE_DIR#/}" = "$SAVE_DIR" ]; then
+     echo "SAVE_DIR_NOT_ABSOLUTE: $SAVE_DIR"
+   elif [ -e "$dest" ]; then
+     echo "EXISTS: $dest"
+   elif mkdir -p "$SAVE_DIR" && mv -n "<WORK>/receipt.pdf" "$dest" \
+        && test ! -e "<WORK>/receipt.pdf" && test -s "$dest"; then
+     echo "SAVED: $dest"
+   else
+     echo "MOVE_FAILED: $dest"
+   fi
    ```
+
+   - `SAVED: <path>`: carry on to step 9 with that path.
+   - `EXISTS: <path>`: ask the user whether to overwrite, save with a suffix
+     (e.g. `_2`), or skip. Re-run the block with the new `filename` (or with
+     `mv -f` to overwrite). Never report the existing file as the new download.
+     If they skip, run the cleanup command.
+   - `SAVE_DIR_NOT_ABSOLUTE`: go back to step 1 and resolve the path.
+   - `MOVE_FAILED`: report it, then run the cleanup command.
 
 ### 8. Diagnostic capture on failure
 
 If a snippet returned an `error` shape, or the PDF came out blank:
 
-1. `TS=$(date +%s)`, then take a screenshot to `/tmp/peloton-skill-diag-${TS}.png`.
+1. Take a screenshot **without** `filePath`, so it is returned inline and no
+   image of the receipt (name, address) is left on disk.
 2. Use `list_network_requests` (filter `resourceTypes: ["fetch","xhr"]`) and
    report the GraphQL and API URLs with their status codes. Do not fetch request
    details: `get_network_request` echoes the bearer token and cookies.
-3. Report the screenshot path and the error code (e.g. `history_shape_changed`, `token_expired`).
+3. Report the error code (e.g. `history_shape_changed`, `token_expired`) and what the screenshot shows.
 4. Point the user at `references/peloton-api-endpoints.md`. The snapshot may need regenerating against the live site.
+5. Run the cleanup command before stopping.
 
 ### 9. Verify the PDF and clean up
 
@@ -386,23 +453,22 @@ If a snippet returned an `error` shape, or the PDF came out blank:
      If `amount` was `null`, read the total off the PDF and report it.
    - **Valid receipt**: "Peloton Interactive UK Limited" (or the regional
      entity), a "VAT ID Number", and the subtotal / tax split are present.
-3. Delete the working files, which contain the user's name and address:
-
-   ```bash
-   rm -rf "<WORK>"
-   ```
-
+3. Run the cleanup command (see "Temporary files and cleanup") whether
+   verification passed or failed. It must print `CLEANUP_OK`.
 4. Report:
    - File saved to: `<full path>`
    - Payment date: `<dd/mm/yyyy>` (`<Month Year>`)
    - Amount: `<amount>` (VAT `<tax>`)
    - Verification: passed or failed (with details)
+   - Cleanup: `CLEANUP_OK`, or which file is left over
 
-If verification fails, warn the user with specifics but keep the file.
+If verification fails, warn the user with specifics but keep the saved PDF.
+Only the temporary files are deleted.
 
-For multiple months, repeat steps 5 to 9 for each invoice. Reuse the
-subscription ID and the step 4 list; do not reuse page-check results from the
-previous invoice.
+For multiple months, repeat steps 5 to 9 for each invoice, with a fresh
+`<WORK>` each time (cleaned up at the end of each invoice). Reuse the
+subscription ID, `<SAVE_DIR>`, and the step 4 list; do not reuse page-check
+results from the previous invoice.
 
 ## Error handling
 
@@ -423,4 +489,7 @@ previous invoice.
 | PDF is ~1 KB / blank | `<body>` was stripped or Chrome got `scriptEnabled=false`. Re-check step 6 |
 | Headless Chrome prints nothing | Make sure a fresh `--user-data-dir` was passed and the HTML path is absolute |
 | Destination file exists | Ask: overwrite, suffix, or skip |
+| A literal `~` directory appeared in the working directory | A quoted `~` path was substituted. Resolve `<SAVE_DIR>` with step 1, move the PDF out, and remove the stray directory after confirming it only holds this skill's output |
+| `CAPTURE_MOVE_FAILED` / `CLEANUP_INCOMPLETE` | A receipt copy may remain in `<PROJECT_DIR>`. Tell the user the exact path; it contains their name and address |
+| Any failure after step 6 started | Run the cleanup command before stopping |
 | PDF verification mismatch | Warn user with specifics, keep the file |

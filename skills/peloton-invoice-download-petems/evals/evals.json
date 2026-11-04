@@ -4,7 +4,7 @@
     {
       "id": 1,
       "prompt": "Download my latest Peloton invoice",
-      "expected_output": "Resolves the active AutoDebit subscription via GraphQL, lists pastInvoices, picks the newest, opens the receipt page, captures it and prints it to PDF with headless Chrome, saves to ~/Desktop/ as Peloton_Invoice_<Month>_<Year>_GBP<Amount>.pdf, verifies date, amount and VAT ID on the PDF, deletes the temp HTML, reports summary. Never returns or prints the bearer token.",
+      "expected_output": "Resolves the active AutoDebit subscription via GraphQL, lists pastInvoices, picks the newest, opens the receipt page, captures it and prints it to PDF with headless Chrome, resolves the default ~/Desktop/ to an absolute path (no literal ~ directory is created), saves there as Peloton_Invoice_<Month>_<Year>_GBP<Amount>.pdf, verifies date, amount and VAT ID on the PDF, runs the cleanup command so no receipt copy remains in /tmp or the working directory (CLEANUP_OK), reports summary. Never returns or prints the bearer token.",
       "files": []
     },
     {
@@ -17,6 +17,18 @@
       "id": 3,
       "prompt": "Download my Peloton invoice for January 2019",
       "expected_output": "Finds no matching invoice in the PaymentHistory list, shows the available months with amounts, asks the user to pick one. Does not write any file.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "Download my October 2026 Peloton invoice to ~/Documents/Expense Receipts/$fitness (2026)/",
+      "expected_output": "Resolves the save location to an absolute path in step 1 and passes it single-quoted, so the space, $ and parentheses are preserved literally. Creates the directory if needed and saves Peloton_Invoice_October_2026_GBP<Amount>.pdf inside it. No stray ~ or truncated directory is created. Reports CLEANUP_OK.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "Download my latest Peloton invoice (simulate: the receipt page never shows 'Total amount paid', or headless Chrome writes a blank PDF)",
+      "expected_output": "Takes an inline screenshot (no filePath), reports the error code, and runs the cleanup command before stopping, so no .peloton_receipt_* file is left in the working directory and the /tmp work directory is removed.",
       "files": []
     }
   ]
