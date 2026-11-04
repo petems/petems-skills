@@ -338,7 +338,9 @@ Map the request to invoice(s):
 - **Empty list** (`count: 0`): if other invoice candidates exist, run this step
   for each of them. If none has invoices, tell the user there are no Peloton
   invoices on the account yet, and stop.
-- **"Latest"**: take `invoices[0]` of the primary.
+- **"Latest"**: take `invoices[0]` of the primary. If the primary is empty,
+  take `invoices[0]` of the candidate whose first invoice has the most recent
+  `paymentDate`.
 - **A named month/year**: find the entry with matching `month` and `year`. If a
   month has more than one invoice (a plan change or a retried payment), list
   them and ask the user which they want, or offer all of them.
