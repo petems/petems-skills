@@ -70,7 +70,16 @@ Observed response (IDs redacted):
 
 `billingStrategy` values seen in the app's filter list: `Amazon`, `Apple`,
 `AutoDebit`, `Bango`, `Google`, `NotBilled`, `Roku`. Only `AutoDebit` has
-Peloton-issued invoices.
+Peloton-issued invoices. `Bango` is a carrier and partner billing platform, so
+those charges appear on the mobile carrier's or partner's bill. Only
+`AutoDebit` and `NotBilled` were observed on the reference account; the other
+values come from the app's own filter list.
+
+- `country` comes from the locale in the account URL (`/en-GB/` gives `GB`).
+  Only `GB` has been verified.
+- A member can have several `AutoDebit` subscriptions over time (for example a
+  cancelled one and a newer active one). Each has its own `pastInvoices`, so an
+  old invoice may only appear on the cancelled subscription.
 
 ### Payment history
 
@@ -124,8 +133,12 @@ Observed entry:
 ## Receipt page
 
 ```text
-https://account.onepeloton.com/en-GB/mymembership/v2/subscriptions/{subscriptionId}/invoices/{invoiceId}
+https://account.onepeloton.com/{locale}/mymembership/v2/subscriptions/{subscriptionId}/invoices/{invoiceId}
 ```
+
+`{locale}` is the path segment the account site redirected to (`en-GB` on the
+reference account). `{subscriptionId}` must be the subscription the invoice
+came from.
 
 - `text/html`, rendered client-side. Wait for "Total amount paid".
 - No PDF or download control. The site expects the user to print the page.
@@ -137,6 +150,20 @@ https://account.onepeloton.com/en-GB/mymembership/v2/subscriptions/{subscription
   `fides-overlay-modal-link-shown` class, so never strip elements by
   `[class*="fides"]`.
 
+### Offline capture hardening
+
+The skill prints a captured copy, not the live page. Before serialising it:
+
+- removes `script`, `noscript`, frames, `object`, `embed`, `link`, `style`,
+  `meta`, `base`, `form`, and known tracker and consent elements;
+- removes every `on*` attribute and any `javascript:` URL;
+- prepends a CSP meta tag:
+  `default-src 'none'; script-src 'none'; connect-src 'none'; style-src 'unsafe-inline' https:; img-src https: data:; font-src https: data:`.
+
+Verified 2026-11-04: the hardened copy renders identically (94,288 bytes, the
+same as the unhardened copy). Fonts load via the inlined `@import` from
+`fonts.googleapis.com`, which `style-src https:` allows.
+
 ### Rendered PDF (reference)
 
 Headless Chrome print of the captured HTML: 1 page A4, about 94 KB, text
@@ -147,8 +174,7 @@ extractable with `pdftotext`. A blank render is 872 bytes.
 - `evaluate_script` `args` accepts element uids only. Inline values as literals.
 - `evaluate_script` `filePath` output is JSON-encoded. Decode with `json.load` before use.
 - `evaluate_script` `filePath` and `sourcePath` are sandboxed to the workspace
-  roots (`/tmp` is rejected for `sourcePath`; `filePath` behaves the same per the
-  Three skill). The receipt capture therefore usually lands in the project
+  roots (`/tmp` is rejected for both, verified 2026-11-04). The receipt capture therefore lands in the project
   directory, which is why the skill moves it to `/tmp` immediately and cleans up
   on every exit path.
 - A `~` inside double quotes is not expanded by the shell. Resolve save paths

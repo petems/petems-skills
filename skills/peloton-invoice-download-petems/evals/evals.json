@@ -4,7 +4,7 @@
     {
       "id": 1,
       "prompt": "Download my latest Peloton invoice",
-      "expected_output": "Resolves the active AutoDebit subscription via GraphQL, lists pastInvoices, picks the newest, opens the receipt page, captures it and prints it to PDF with headless Chrome, resolves the default ~/Desktop/ to an absolute path (no literal ~ directory is created), saves there as Peloton_Invoice_<Month>_<Year>_GBP<Amount>.pdf, verifies date, amount and VAT ID on the PDF, runs the cleanup command so no receipt copy remains in /tmp or the working directory (CLEANUP_OK), reports summary. Never returns or prints the bearer token.",
+      "expected_output": "Resolves the active AutoDebit subscription via GraphQL, lists pastInvoices, picks the newest, opens the receipt in its own tab, captures it (scripts and handlers stripped, CSP added) and prints it with headless Chrome, verifies date, amount and VAT ID on the unsaved PDF (VERIFY_OK), then resolves the default ~/Desktop/ to an absolute path (no literal ~ directory) and saves Peloton_Invoice_<Month>_<Year>_GBP<Amount>.pdf there. Runs the cleanup command (CLEANUP_OK) and closes the receipt tab. Never returns or prints the bearer token.",
       "files": []
     },
     {
@@ -27,8 +27,20 @@
     },
     {
       "id": 5,
-      "prompt": "Download my latest Peloton invoice (simulate: the receipt page never shows 'Total amount paid', or headless Chrome writes a blank PDF)",
-      "expected_output": "Takes an inline screenshot (no filePath), reports the error code, and runs the cleanup command before stopping, so no .peloton_receipt_* file is left in the working directory and the /tmp work directory is removed.",
+      "prompt": "Download my latest Peloton invoice (simulate: the receipt page never shows 'Total amount paid')",
+      "expected_output": "wait_for times out, so the skill reports receipt_not_rendered, takes an inline screenshot (no filePath), saves nothing, and runs the cleanup command (CLEANUP_OK) and closes the receipt tab before stopping.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "Download my Peloton receipt for last month (simulate: the only subscription has billingStrategy Apple or Bango)",
+      "expected_output": "Step 3 finds no AutoDebit subscription, explains there is no Peloton invoice, and points the user to the App Store purchase history (Apple) or their mobile carrier / partner bill (Bango). Creates no files.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "Download my Peloton invoice from March 2024 (simulate: an active subscription started in 2025 and an older cancelled AutoDebit subscription covers 2024)",
+      "expected_output": "Does not find March 2024 on the active subscription, re-runs step 4 for the cancelled AutoDebit subscription, finds the invoice there, and opens the receipt using that invoice's own subscriptionId.",
       "files": []
     }
   ]
