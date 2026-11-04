@@ -1,0 +1,23 @@
+{
+  "skill_name": "peloton-invoice-download-petems",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Download my latest Peloton invoice",
+      "expected_output": "Resolves the active AutoDebit subscription via GraphQL, lists pastInvoices, picks the newest, opens the receipt page, captures it and prints it to PDF with headless Chrome, saves to ~/Desktop/ as Peloton_Invoice_<Month>_<Year>_GBP<Amount>.pdf, verifies date, amount and VAT ID on the PDF, deletes the temp HTML, reports summary. Never returns or prints the bearer token.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Grab my Peloton receipts for August, September and October 2026 and save them to ~/Documents/receipts/",
+      "expected_output": "Matches each month to an invoice ID from the PaymentHistory list, processes them one at a time, saves three PDFs with correct filenames to ~/Documents/receipts/, verifies each one's date and amount",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Download my Peloton invoice for January 2019",
+      "expected_output": "Finds no matching invoice in the PaymentHistory list, shows the available months with amounts, asks the user to pick one. Does not write any file.",
+      "files": []
+    }
+  ]
+}
