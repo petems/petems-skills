@@ -1,13 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync, symlinkSync, writeFileSync, linkSync, unlinkSync, statSync } from 'node:fs';
+import { readFileSync, symlinkSync, writeFileSync, linkSync, unlinkSync, statSync, mkdirSync, mkdtempSync, renameSync, readdirSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { parseArgs } from '../scripts/lib/args.mjs';
 import { analyze, render } from '../scripts/lib/analyze.mjs';
 import { UsageError, UserError } from '../scripts/lib/errors.mjs';
-import { writeOutputSafely } from '../scripts/lib/cli.mjs';
+import { writeOutputSafely, resolveOutput } from '../scripts/lib/cli.mjs';
 import { SECTION_KEYS, DEFAULT_SECTION_KEYS } from '../scripts/lib/sections/index.mjs';
 import { richTrace, writeTemp } from './helpers/fixtures.mjs';
 
@@ -99,6 +100,7 @@ describe('CLI (child process)', () => {
     writeFileSync(out, 'x'.repeat(expected.length * 3));
     assert.equal(run(file, '--out', out).status, 0);
     assert.equal(readFileSync(out, 'utf8'), expected, 'old, longer content fully replaced');
+    assert.deepEqual(readdirSync(dirname(file)).sort(), ['in.json', 'new.md'], 'no temp file left');
   });
 
   it('--help and --list exit 0', () => {
@@ -221,46 +223,117 @@ describe('JSON output', () => {
   });
 });
 
-// The early check runs before analysis; these call the write-time check
-// directly, after swapping the output path, to stand in for a race.
+// resolveOutput runs before analysis; these swap paths after it and then call
+// the write-time check directly, to stand in for a race during analysis.
 describe('writeOutputSafely', () => {
   const setup = () => {
     const input = writeTemp('in.json', 'TRACE');
     const st = statSync(input);
-    return { input, id: { dev: st.dev, ino: st.ino }, out: input.replace(/in\.json$/, 'out.md') };
+    const dir = dirname(input);
+    return { input, dir, id: { dev: st.dev, ino: st.ino }, out: join(dir, 'out.md') };
   };
   const refused = (re) => (e) => e instanceof UserError && re.test(e.message);
+  const ls = (d) => readdirSync(d).sort();
 
   it('refuses when the output was swapped for a symlink to the input', () => {
-    const { input, id, out } = setup();
+    const { input, dir, id, out } = setup();
     writeFileSync(out, 'old report'); // passed the early check as a regular file
+    const target = resolveOutput(out);
     unlinkSync(out);
     symlinkSync(input, out);
-    assert.throws(() => writeOutputSafely(out, id, 'REPORT'), refused(/through a symlink/));
+    assert.throws(() => writeOutputSafely(target, id, 'REPORT'), refused(/through a symlink/));
     assert.equal(readFileSync(input, 'utf8'), 'TRACE', 'input intact');
+    assert.deepEqual(ls(dir), ['in.json', 'out.md'], 'no temp file left');
   });
 
   it('refuses when the output was swapped for a hard link to the input', () => {
-    const { input, id, out } = setup();
+    const { input, dir, id, out } = setup();
+    const target = resolveOutput(out);
     linkSync(input, out);
-    assert.throws(() => writeOutputSafely(out, id, 'REPORT'), refused(/over the input trace/));
+    assert.throws(() => writeOutputSafely(target, id, 'REPORT'), refused(/over the input trace/));
     assert.equal(readFileSync(input, 'utf8'), 'TRACE', 'input intact');
+    assert.deepEqual(ls(dir), ['in.json', 'out.md'], 'no temp file left');
   });
 
   it('refuses a symlink to another file, leaving it intact', () => {
-    const { id, out } = setup();
-    const other = out.replace(/out\.md$/, 'other.txt');
+    const { dir, id, out } = setup();
+    const other = join(dir, 'other.txt');
     writeFileSync(other, 'keep me');
+    const target = resolveOutput(out);
     symlinkSync(other, out);
-    assert.throws(() => writeOutputSafely(out, id, 'REPORT'), refused(/through a symlink/));
+    assert.throws(() => writeOutputSafely(target, id, 'REPORT'), refused(/through a symlink/));
     assert.equal(readFileSync(other, 'utf8'), 'keep me');
+    assert.deepEqual(ls(dir), ['in.json', 'other.txt', 'out.md'], 'no temp file left');
   });
 
-  it('writes a new file and fully replaces an existing one', () => {
-    const { id, out } = setup();
-    writeOutputSafely(out, id, 'first, longer report');
+  it('refuses a directory or other non-regular file at the output path', () => {
+    const { input, dir, id, out } = setup();
+    const target = resolveOutput(out);
+    mkdirSync(out);
+    assert.throws(() => writeOutputSafely(target, id, 'REPORT'), refused(/not a regular file/));
+    assert.deepEqual(ls(out), [], 'directory untouched');
+    assert.deepEqual(ls(dir), ['in.json', 'out.md'], 'no temp file left');
+    const fifo = join(dir, 'fifo.md');
+    if (spawnSync('mkfifo', [fifo]).status === 0) {
+      assert.throws(() => writeOutputSafely(resolveOutput(fifo), id, 'REPORT'), refused(/not a regular file/));
+      assert.ok(statSync(fifo).isFIFO());
+      assert.deepEqual(ls(dir), ['fifo.md', 'in.json', 'out.md'], 'no temp file left');
+    }
+    assert.equal(readFileSync(input, 'utf8'), 'TRACE', 'input intact');
+  });
+
+  it('refuses when a parent directory was swapped for a symlink to another directory', () => {
+    const base = mkdtempSync(join(tmpdir(), 'simplify-chrome-trace-test-'));
+    const sub = join(base, 'sub');
+    const victim = join(base, 'victim');
+    mkdirSync(sub);
+    mkdirSync(victim);
+    const input = join(base, 'in.json');
+    writeFileSync(input, 'TRACE');
+    const st = statSync(input);
+    const id = { dev: st.dev, ino: st.ino };
+    writeFileSync(join(victim, 'out.md'), 'precious data');
+    const target = resolveOutput(join(sub, 'out.md'));
+    renameSync(sub, join(base, 'sub-moved'));
+    symlinkSync(victim, sub);
+    assert.throws(() => writeOutputSafely(target, id, 'REPORT'), refused(/directory of .* changed during analysis/));
+    assert.equal(readFileSync(join(victim, 'out.md'), 'utf8'), 'precious data', 'file behind the symlink untouched');
+    assert.deepEqual(ls(victim), ['out.md'], 'no temp file left in the symlink target');
+    assert.deepEqual(ls(join(base, 'sub-moved')), [], 'nothing written to the original directory');
+    // A different real directory at the same path is refused too.
+    unlinkSync(sub);
+    mkdirSync(sub);
+    assert.throws(() => writeOutputSafely(target, id, 'REPORT'), refused(/changed during analysis/));
+    assert.deepEqual(ls(sub), [], 'no temp file left');
+    assert.equal(readFileSync(input, 'utf8'), 'TRACE', 'input intact');
+  });
+
+  it('resolves a parent that is already a symlink at startup', () => {
+    const { dir, id } = setup();
+    const real = join(dir, 'real');
+    mkdirSync(real);
+    symlinkSync(real, join(dir, 'alias'));
+    const target = resolveOutput(join(dir, 'alias', 'out.md'));
+    assert.equal(target.dir, realpathSync(real));
+    writeOutputSafely(target, id, 'REPORT');
+    assert.equal(readFileSync(join(real, 'out.md'), 'utf8'), 'REPORT');
+    assert.deepEqual(ls(real), ['out.md']);
+  });
+
+  it('rejects an --out that does not name a file', () => {
+    const { dir } = setup();
+    for (const p of ['', '.', '..', dir + '/.', dir + '/..', dir + '/', dir]) {
+      assert.throws(() => resolveOutput(p), refused(/must name a file/), JSON.stringify(p));
+    }
+    assert.throws(() => resolveOutput(join(dir, 'missing', 'out.md')), refused(/cannot use the directory of --out/));
+  });
+
+  it('writes a new file and fully replaces an existing one, leaving no temp files', () => {
+    const { dir, id, out } = setup();
+    writeOutputSafely(resolveOutput(out), id, 'first, longer report');
     assert.equal(readFileSync(out, 'utf8'), 'first, longer report');
-    writeOutputSafely(out, id, 'short');
+    writeOutputSafely(resolveOutput(out), id, 'short');
     assert.equal(readFileSync(out, 'utf8'), 'short');
+    assert.deepEqual(ls(dir), ['in.json', 'out.md']);
   });
 });

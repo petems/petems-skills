@@ -465,13 +465,28 @@ node scripts/simplify-chrome-trace.mjs <trace.json[.gz]> [options]
 * `--out` stderr note: `Wrote <file> (<bytes> bytes) from <size> MB trace in
   <secs>s`.
 * `--out` never overwrites the input trace and never writes through a
-  symlink. Both are checked before analysis (fast failure) and again at write
-  time: the output is opened with `O_NOFOLLOW` and without `O_TRUNC`, the
-  opened file is compared (device and inode) with the input as stat'ed at
-  startup, and only then truncated and written. So a path swapped during
-  analysis for a symlink or hard link to the trace cannot destroy it, and a
-  planted symlink (for example in a shared `/tmp`) cannot redirect the write.
-  Each refusal is a one-line user error, exit code 1.
+  symlink. Both are checked before analysis (fast failure). Also before
+  analysis, the output's parent directory is resolved once with realpath (a
+  symlinked parent such as macOS `/tmp` is fine) and its device and inode are
+  recorded; `--out` must name a file, not a directory.
+* At write time no existing file is ever opened for writing or truncated. The
+  report is written to a new temp file with a random name in the resolved
+  directory (`O_CREAT|O_EXCL|O_NOFOLLOW`), then renamed over the output only
+  after checking that no component of the resolved directory is now a
+  symlink, that the directory still has the recorded device and inode, and
+  that the destination is absent or a regular file that is not the input
+  (device and inode, so hard links count). rename replaces the directory
+  entry and does not follow a symlink there, so an existing regular file is
+  fully replaced. On any refusal or error the temp file is removed. Each
+  refusal is a one-line user error, exit code 1.
+* Residual risk: Node has no directory-handle (`openat`) API, so someone who
+  can write to a parent directory and swaps it in the short window between
+  the final check and the rename can still change where the new file lands:
+  the rename could then replace a same-named entry in another directory the
+  caller can write to. No existing file's contents are ever opened for
+  writing or truncated (other hard links to a replaced file keep its data),
+  and the input trace is never written. To rule this out entirely, write
+  `--out` into a directory only you can modify.
 
 ## Output formatting
 
