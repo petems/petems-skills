@@ -3,7 +3,7 @@
 import { fmtMs, fmtPct, fmtCount, mdTable, round3, shortUrl, stripQuery, byStr } from '../format.mjs';
 import { aggregateSamples, frameName, frameLocation } from '../profile.mjs';
 import { threadShort } from '../threads.mjs';
-import { emptyBlock, heading, topN, moreLine, ms } from './common.mjs';
+import { emptyBlock, heading, topN, moreLine, ms, inPageProcess } from './common.mjs';
 
 export const NO_PROFILE_NOTE = 'No CPU profile in this trace. Record with "JavaScript samples" enabled.';
 
@@ -25,11 +25,15 @@ export function scopeSamples(ctx) {
 
 function noProfileNote(ctx) {
   if (ctx.prof.threads.size === 0) return NO_PROFILE_NOTE;
-  const names = [...ctx.prof.threads.values()].map((pt) => {
+  // Only name profiled threads from the page's own process(es): another
+  // tab's thread names must not appear in this page's report.
+  const page = [...ctx.prof.threads.values()].filter((pt) => inPageProcess(ctx, pt));
+  if (!page.length) return 'No CPU profile for this page (the trace only has profiles from other processes).';
+  const names = page.map((pt) => {
     const th = ctx.threadByKey.get(pt.key);
     return th && th.name ? `${th.name} (${pt.key})` : pt.key;
   });
-  return `No CPU profile for the selected thread(s). Profiled threads: ${names.join(', ')}. Use --thread to pick one.`;
+  return `No CPU profile for the selected thread(s). Profiled threads in this page's process: ${names.join(', ')}. Use --thread to pick one.`;
 }
 
 export const functions = {

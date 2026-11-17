@@ -122,6 +122,10 @@ listing their `pid:tid` values and asks for `--thread pid:tid` (or
 Open-ended forms `START-` and `-END` are allowed. `--window breadcrumb` uses
 `metadata.modifications.initialBreadcrumb.window.{min,max}` (absolute µs, the
 range the user had selected in DevTools when saving). Errors if absent.
+A window (range, open-ended or breadcrumb) that does not overlap the trace
+span at all is a single-line user error (exit code 1) that states the trace
+span, for example `--window 2000-3000 ms is outside the trace (0.0-1.0 ms)`.
+A window that partly overlaps is clipped to the trace.
 
 Semantics:
 
@@ -147,6 +151,13 @@ Semantics:
   (some traces put `timeDeltas` inside `cpuProfile`; accept both). Nodes are
   declared incrementally across chunks and may reference parents declared in
   earlier chunks. Nodes give either `parent` or `children`; accept both.
+* Malformed parent links are tolerated without amplification: the parent
+  walk stops at the first node it has already visited, and the last new node
+  becomes a root, so a cycle anywhere in a chain (not only one back to the
+  start) creates at most one node per profile node. No depth limit is
+  needed: the walk is bounded by the profile's node count, and nodes keep a
+  parent link only (no per-node ancestor list, which would grow
+  quadratically with depth), so memory stays linear in the input.
 * The profile belongs to the thread (`pid:tid`) of its `Profile` event.
 * Sample timestamps: `t[0] = startTime + timeDeltas[0]`, `t[i] = t[i-1] +
   timeDeltas[i]` (continuous across chunks). Per DevTools'
@@ -168,6 +179,10 @@ Semantics:
   thread contributes. Percentages are of that scope's non-idle sampled time.
 * Header reports, per profiled thread: sampled span, busy (non-idle) time,
   idle time. Never sum idle time across threads into one misleading number.
+* Unless `--thread all` is given, only profiles whose pid is one of the
+  analysed page's processes are reported (the page's workers stay in).
+  Profiles from other processes (other tabs) are left out of every section,
+  with one header line giving only their count, never their names or URLs.
 
 ## Report sections
 
@@ -201,7 +216,9 @@ note, so the agent knows it was checked.
 * file size, event count, `metadata.source` and `startTime` if present
 * wall-clock span; window (if any) and event count in window
 * main thread(s) and how chosen
-* per profiled thread: busy / idle / program / GC sampled ms
+* per profiled thread in the page's process(es): busy / idle / program / GC
+  sampled ms; if profiles from other processes were left out, one line
+  `CPU profiles left out: N from other processes (use --thread all to include them)`
 * main-thread task stats in scope: number of tasks, total busy ms, busy % of
   scope, count of tasks > 50 ms, **Total Blocking Time** (each task's
   blocking portion is everything after its first 50 ms of effective
@@ -473,10 +490,12 @@ node scripts/simplify-chrome-trace.mjs <trace.json[.gz]> [options]
   thread names, X, B/E, instant, async, profile + chunks, network,
   EventTiming, user timing).
 * Cover at least: streaming tokenizer under every chunk size from 1 to 17
-  bytes including strings with braces and escaped quotes; metadata after
+  bytes including strings with braces and escaped quotes; cyclic and very
+  deep profile parent chains; metadata after
   events; bare array; truncated array; gzip detection; self-time nesting
   including overrun children and ties; B/E pairing and unclosed B; main
-  thread detection order; window overlap clipping; per-sample window
+  thread detection order; window overlap clipping; windows outside the
+  trace; other tabs' CPU profiles left out; per-sample window
   filtering; sample duration semantics and median last sample; 0-based to
   1-based line numbers; recursion not double counting totals; long task
   artifact subtraction; TBT; timeline split across buckets never exceeding

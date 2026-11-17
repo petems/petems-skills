@@ -1,6 +1,7 @@
 // --window parsing and resolution.
 
 import { UsageError, UserError } from './errors.mjs';
+import { fmtMs } from './format.mjs';
 
 const NUM = '(\\d+(?:\\.\\d+)?|\\.\\d+)';
 const RANGE = new RegExp(`^\\s*${NUM}?\\s*-\\s*${NUM}?\\s*$`);
@@ -42,4 +43,20 @@ export function resolveWindow(spec, origin, metadata) {
     end: spec.endMs === null ? Infinity : origin + spec.endMs * 1000,
     source: '--window',
   };
+}
+
+/**
+ * Fail when a set window does not overlap the trace span [origin, traceEnd]
+ * at all (it would otherwise report inverted bounds). A window that partly
+ * overlaps is fine: it is clipped to the trace.
+ */
+export function checkWindowOverlap(spec, win, origin, traceEnd) {
+  if (!win.set || (win.start <= traceEnd && win.end >= origin)) return;
+  const off = (us) => fmtMs((us - origin) / 1000);
+  const span = `(${fmtMs(0)}-${off(traceEnd)} ms)`;
+  const asked =
+    spec.kind === 'breadcrumb'
+      ? `breadcrumb ${off(win.start)}-${off(win.end)} ms`
+      : `${spec.startMs === null ? '' : spec.startMs}-${spec.endMs === null ? '' : spec.endMs} ms`;
+  throw new UserError(`--window ${asked} is outside the trace ${span}`);
 }

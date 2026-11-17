@@ -116,3 +116,12 @@ export function omittedNote(filter, one, many) {
   }
   return parts.join(' ');
 }
+
+/**
+ * True when a CPU profile thread belongs to the analysed page's process(es),
+ * or when --thread all asked for everything. Keeps the page's own workers but
+ * never another tab's profile.
+ */
+export function inPageProcess(ctx, pt) {
+  return ctx.scope.all || ctx.scopePids.has(pt.pid);
+}

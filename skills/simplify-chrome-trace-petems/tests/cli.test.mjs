@@ -109,6 +109,13 @@ describe('CLI (child process)', () => {
     const noCrumb = writeTemp('nocrumb.json', '[{"ph":"X","name":"A","pid":1,"tid":1,"ts":5,"dur":1}]');
     assert.equal(run(noCrumb, '--window', 'breadcrumb').status, 1);
     assert.equal(run(noCrumb, '--thread', 'Nope').status, 1);
+    for (const w of ['2000-3000', '2000-']) {
+      const r = run(noCrumb, '--window', w);
+      assert.equal(r.status, 1, w);
+      assert.equal(r.stdout, '');
+      assert.match(r.stderr, new RegExp(`--window ${w} ms is outside the trace \\(0\\.0-0\\.0 ms\\)`));
+      assert.equal(r.stderr.trim().split('\n').length, 1);
+    }
   });
 
   it('end to end: plain and gzipped fixtures give identical reports', () => {

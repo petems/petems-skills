@@ -69,7 +69,7 @@ export function frameName(f) {
 
 /**
  * Build per-thread sample tables from raw profiles.
- * @returns {{frames:any[], nodes:{frame:number,kind:number,anc:number[]}[], threads:Map<string,{key:string,pid:any,tid:any,times:Float64Array,durs:Float64Array,node:Int32Array}>}}
+ * @returns {{frames:any[], nodes:{frame:number,kind:number,parent:number}[], threads:Map<string,{key:string,pid:any,tid:any,times:Float64Array,durs:Float64Array,node:Int32Array}>}}
  */
 export function buildProfiles(rawProfiles) {
   const frames = [];
@@ -88,14 +88,21 @@ export function buildProfiles(rawProfiles) {
     const resolve = (id) => {
       const have = local.get(id);
       if (have !== undefined) return have;
-      // walk up iteratively
+      // Walk up iteratively. A malformed (cyclic) parent chain stops at the
+      // first repeated node and the last new node becomes a root, so every
+      // profile node is created at most once and the walk is bounded by the
+      // profile's own node count (no separate depth guard is needed).
       const chain = [];
+      const seen = new Set();
       let cur = id;
-      let guard = 0;
-      while (cur != null && local.get(cur) === undefined && guard++ < 100000) {
+      while (cur != null && local.get(cur) === undefined) {
+        if (seen.has(cur)) {
+          cur = null;
+          break;
+        }
+        seen.add(cur);
         chain.push(cur);
         cur = parentOf.get(cur);
-        if (chain.length > 1 && cur === chain[0]) break;
       }
       let parentGlobal = cur != null ? local.get(cur) : undefined;
       for (let i = chain.length - 1; i >= 0; i--) {
@@ -124,10 +131,10 @@ export function buildProfiles(rawProfiles) {
         } else {
           kind = KIND_ROOT;
         }
-        const pAnc = parentGlobal !== undefined ? nodes[parentGlobal].anc : [];
-        const anc = frame >= 0 && !pAnc.includes(frame) ? pAnc.concat(frame) : pAnc;
+        // Store only the parent link: a per-node ancestor list would grow
+        // quadratically with stack depth on a deep (or hostile) profile.
         const g = nodes.length;
-        nodes.push({ frame, kind, anc });
+        nodes.push({ frame, kind, parent: parentGlobal !== undefined ? parentGlobal : -1 });
         local.set(nid, g);
         parentGlobal = g;
       }
@@ -253,10 +260,28 @@ export function aggregateSamples(prof, th, start, end, acc) {
         break;
       default: {
         a.self.set(nd.frame, (a.self.get(nd.frame) || 0) + d);
-        const anc = nd.anc;
-        for (let k = 0; k < anc.length; k++) a.total.set(anc[k], (a.total.get(anc[k]) || 0) + d);
+        // Inclusive time: each distinct frame on the stack once per sample,
+        // so recursion does not double count.
+        const seen = ancestorStamp(prof);
+        for (let g = node[i]; g >= 0; g = nodes[g].parent) {
+          const f = nodes[g].frame;
+          if (f < 0 || seen.marks[f] === seen.stamp) continue;
+          seen.marks[f] = seen.stamp;
+          a.total.set(f, (a.total.get(f) || 0) + d);
+        }
       }
     }
   }
   return a;
+}
+
+/** Per-profile scratch marks for de-duplicating frames on one sample's stack. */
+function ancestorStamp(prof) {
+  let s = prof._stamp;
+  if (!s || s.marks.length < prof.frames.length) s = prof._stamp = { marks: new Int32Array(prof.frames.length), stamp: 0 };
+  if (++s.stamp > 0x7fffffff) {
+    s.marks.fill(0);
+    s.stamp = 1;
+  }
+  return s;
 }

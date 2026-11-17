@@ -6,7 +6,7 @@ import { loadTraceFile } from './loader.mjs';
 import { buildNesting, topLevelTasks } from './nesting.mjs';
 import { buildProfiles } from './profile.mjs';
 import { resolveThreads, mainFrameInfo } from './threads.mjs';
-import { resolveWindow, parseWindowSpec } from './window.mjs';
+import { resolveWindow, parseWindowSpec, checkWindowOverlap } from './window.mjs';
 import { makeMatcher } from './match.mjs';
 import { makeUtc, joinBlocks } from './format.mjs';
 import { SECTIONS, DEFAULT_SECTION_KEYS, SECTION_KEYS } from './sections/index.mjs';
@@ -44,6 +44,7 @@ export function buildContext(model, load, options) {
   const origin = model.origin;
   const traceEnd = model.maxEnd;
   const win = resolveWindow(opts.window, origin, metadata);
+  checkWindowOverlap(opts.window, win, origin, traceEnd);
   const scope = resolveThreads(model, opts.thread);
   if (scope.warnings) warnings.push(...scope.warnings);
   const scopeStart = Math.max(win.start, origin);

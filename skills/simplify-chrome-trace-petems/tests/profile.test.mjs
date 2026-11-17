@@ -74,6 +74,42 @@ describe('CPU profile', () => {
     assert.equal(a.self.get(outer), undefined);
   });
 
+  it('cyclic parent chains stop at the first repeated node, one global node per profile node', () => {
+    // 1 -> 2 -> 3 -> 2 (cycle that does not return to the start), a self-loop
+    // 4 -> 4, and a second disjoint cycle 5 -> 6 -> 7 -> 6.
+    const fn = (id, parent) => ({ id, parent, functionName: `f${id}`, url: 'https://a.test/c.js', lineNumber: id });
+    const nodes = [fn(1, 2), fn(2, 3), fn(3, 2), fn(4, 4), fn(5, 6), fn(6, 7), fn(7, 6)];
+    const b = new TraceBuilder().mainThread();
+    b.x('RunTask', BASE, 1_000_000);
+    b.profile({ nodes, samples: [1, 4, 5, 3, 7], deltas: [0, 1000, 1000, 1000, 1000] });
+    const m = collectEvents(b.events);
+    const p = buildProfiles(m.profiles);
+    assert.ok(p.nodes.length <= nodes.length, `global nodes ${p.nodes.length} must not exceed profile nodes ${nodes.length}`);
+    const th = [...p.threads.values()][0];
+    const a = aggregateSamples(p, th, -Infinity, Infinity);
+    const total = Object.fromEntries([...a.total].map(([f, d]) => [p.frames[f].functionName, d]));
+    assert.equal(total.f1, 1000);
+    // The walk from 1 stops when it meets 2 again, so 3 becomes the root: 3 -> 2 -> 1.
+    assert.equal(total.f2, 1000);
+    assert.equal(total.f3, 2000, 'f3 is on the stacks of samples 1 and 3');
+    const r = analyze(b.events, { sections: ['summary', 'functions'] });
+    assert.equal(r.sections[1].data.rows.length, 7, 'analysis completes with every frame on a sampled stack');
+  });
+
+  it('a very deep parent chain stays linear in memory and keeps inclusive time', () => {
+    const N = 50_000;
+    const nodes = [];
+    for (let id = 1; id <= N; id++) nodes.push({ id, parent: id > 1 ? id - 1 : undefined, functionName: `d${id}`, url: 'https://a.test/d.js', lineNumber: id });
+    const b = new TraceBuilder().mainThread();
+    b.x('RunTask', BASE, 1_000_000);
+    b.profile({ nodes, samples: [N, N], deltas: [0, 1000] });
+    const p = buildProfiles(collectEvents(b.events).profiles);
+    assert.equal(p.nodes.length, N);
+    const a = aggregateSamples(p, [...p.threads.values()][0], -Infinity, Infinity);
+    assert.equal(a.total.size, N);
+    assert.equal(a.total.get(p.frames.findIndex((f) => f.functionName === 'd1')), 2000);
+  });
+
   it('counts only the part of each sample inside a half-open range', () => {
     // samples at 0, 1000, 2000, 3000 (relative), each lasting 1000 us
     const { p } = prof({ samples: [5, 5, 5, 5], deltas: [0, 1000, 1000, 1000], chunks: 1 });

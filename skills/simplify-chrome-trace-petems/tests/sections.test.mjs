@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { analyze, render } from '../scripts/lib/analyze.mjs';
+import { UserError } from '../scripts/lib/errors.mjs';
 import { bucketize, collapseQuiet, fitBucketMs, MAX_BUCKETS } from '../scripts/lib/sections/timeline.mjs';
 import { inpEstimate, groupInteractions } from '../scripts/lib/sections/interactions.mjs';
 import { clsSessions } from '../scripts/lib/sections/vitals.mjs';
@@ -87,6 +88,26 @@ describe('summary task stats', () => {
     const d = section(b.events, 'summary', { window: '50-75' });
     assert.equal(d.tasks.busyMs, 25);
     assert.equal(d.tasks.busyPct, 100);
+  });
+
+  it('a window outside the trace is a user error; a partly overlapping one is clipped', () => {
+    const b = new TraceBuilder().mainThread();
+    b.x('RunTask', BASE, ms(1));
+    const fails = (window, re) =>
+      assert.throws(
+        () => analyze(b.events, { sections: ['summary'], window }),
+        (e) => e instanceof UserError && re.test(e.message) && !e.message.includes('\n'),
+        String(window),
+      );
+    fails('2000-3000', /^--window 2000-3000 ms is outside the trace \(0\.0-1\.0 ms\)$/);
+    fails('2000-', /^--window 2000- ms is outside the trace \(0\.0-1\.0 ms\)$/);
+    const crumb = (min, max) => ({ metadata: { modifications: { initialBreadcrumb: { window: { min, max } } } } });
+    assert.throws(() => analyze(b.events, { sections: ['summary'], window: 'breadcrumb', ...crumb(BASE + ms(5), BASE + ms(6)) }), /--window breadcrumb 5\.0-6\.0 ms is outside the trace/);
+    assert.throws(() => analyze(b.events, { sections: ['summary'], window: 'breadcrumb', ...crumb(BASE - ms(6), BASE - ms(5)) }), /outside the trace/);
+    const d = section(b.events, 'summary', { window: '0.5-3000' });
+    assert.deepEqual([d.window.startMs, d.window.endMs, d.window.durationMs], [0.5, 1, 0.5]);
+    assert.equal(section(b.events, 'summary', { window: '0.5-' }).window.endMs, 1);
+    assert.equal(section(b.events, 'summary', { window: '-0.5' }).window.durationMs, 0.5);
   });
 
   it('TBT only counts the blocking portion inside the window', () => {

@@ -4,7 +4,7 @@ import { fmtMs, fmtCount, fmtPct, round3, cleanText } from '../format.mjs';
 import { overlap } from '../nesting.mjs';
 import { aggregateSamples } from '../profile.mjs';
 import { threadLabel, threadShort } from '../threads.mjs';
-import { ms } from './common.mjs';
+import { ms, inPageProcess } from './common.mjs';
 import { busyIntervals, taskIntervals } from './timeline.mjs';
 
 export const TBT_THRESHOLD_US = 50000;
@@ -72,8 +72,15 @@ function countInWindow(ctx) {
 }
 
 export function compute(ctx) {
+  // Only the analysed page's process(es), so its workers stay in but CPU
+  // profiles from other tabs never leak into the report (unless --thread all).
   const profiles = [];
+  let otherProfiles = 0;
   for (const pt of ctx.prof.threads.values()) {
+    if (!inPageProcess(ctx, pt)) {
+      otherProfiles++;
+      continue;
+    }
     const a = aggregateSamples(ctx.prof, pt, ctx.win.start, ctx.win.end);
     const th = ctx.threadByKey.get(pt.key);
     profiles.push({
@@ -113,6 +120,7 @@ export function compute(ctx) {
     mainThreads: ctx.scope.threads.map((t) => ({ label: threadLabel(t), pid: t.pid, tid: t.tid, name: t.name })),
     threadReason: cleanText(ctx.scope.reason),
     profiles,
+    otherProfiles,
     tasks: { ...tasks, busyPct, scopeMs: round3(ctx.scopeMs) },
   };
 }
@@ -144,12 +152,13 @@ export function md(d, report) {
     const names = d.mainThreads.map((t) => t.label).join('; ');
     lines.push(`- Main thread${d.mainThreads.length > 1 ? 's' : ''}: ${names}, chosen by ${d.threadReason}`);
   }
-  if (d.profiles.length === 0) lines.push('- CPU profile: none');
+  if (d.profiles.length === 0) lines.push(d.otherProfiles ? '- CPU profile: none for this page' : '- CPU profile: none');
   for (const p of d.profiles) {
     lines.push(
       `- CPU profile ${p.thread} (${p.pid}:${p.tid}): sampled ${fmtMs(p.spanMs)} ms, busy ${fmtMs(p.busyMs)} ms, idle ${fmtMs(p.idleMs)} ms, program ${fmtMs(p.programMs)} ms, GC ${fmtMs(p.gcMs)} ms`,
     );
   }
+  if (d.otherProfiles) lines.push(`- CPU profiles left out: ${fmtCount(d.otherProfiles)} from other processes (use --thread all to include them)`);
   const t = d.tasks;
   lines.push(
     `- Main-thread tasks in scope: ${fmtCount(t.count)} tasks, busy ${fmtMs(t.busyMs)} ms (${fmtPct(t.busyPct)} of ${fmtMs(t.scopeMs)} ms), ${fmtCount(t.over50)} over 50 ms, TBT (all tasks in scope) ${fmtMs(t.tbtMs)} ms`,

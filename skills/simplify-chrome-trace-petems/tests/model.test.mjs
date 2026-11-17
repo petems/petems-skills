@@ -193,6 +193,59 @@ describe('main thread detection', () => {
     assert.match(out, /analysed the first listed/);
   });
 
+  it('multi-tab trace: CPU profiles from the other tab stay out of the default report', () => {
+    const b = base();
+    b.tracingStarted([
+      { frame: 'TAB1', processId: 200, isOutermostMainFrame: true },
+      { frame: 'TAB2', processId: 300, isOutermostMainFrame: true },
+    ]);
+    b.threadName(200, 9, 'DedicatedWorker thread');
+    b.threadName(300, 8, 'OtherTabWorker');
+    b.x('RunTask', BASE + 100, 80_000, { pid: 200, tid: 5 });
+    const nodes = (name) => [
+      { id: 1, functionName: '(root)' },
+      { id: 2, parent: 1, functionName: '(idle)' },
+      { id: 3, parent: 1, functionName: name, url: `https://${name}.test/app.js`, lineNumber: 1 },
+    ];
+    const prof = (pid, tid, id, name) => b.profile({ pid, tid, id, nodes: nodes(name), samples: [3, 3, 2], deltas: [0, 1000, 1000] });
+    prof(200, 5, '0x1', 'pageMain');
+    prof(200, 9, '0x2', 'pageWorker');
+    prof(300, 7, '0x3', 'otherTabMain');
+    prof(300, 8, '0x4', 'otherTabWorker');
+    const report = analyze(b.events);
+    const out = render(report, { format: 'md' }) + render(report, { format: 'json' });
+    for (const leak of ['otherTab', 'OtherTabWorker', '300:7', '300:8']) assert.ok(!out.includes(leak), `${leak} must not appear`);
+    const summary = report.sections.find((x) => x.key === 'summary').data;
+    assert.deepEqual(summary.profiles.map((p) => `${p.pid}:${p.tid}`).sort(), ['200:5', '200:9'], 'the page keeps its own worker profile');
+    assert.equal(summary.otherProfiles, 2);
+    assert.match(out, /CPU profiles left out: 2 from other processes \(use --thread all to include them\)/);
+    // --thread all shows everything, as asked.
+    const all = analyze(b.events, { sections: ['summary'], thread: 'all' }).sections[0].data;
+    assert.equal(all.profiles.length, 4);
+    assert.equal(all.otherProfiles, 0);
+  });
+
+  it('multi-tab trace: the no-profile note never names threads from the other tab', () => {
+    const b = base();
+    b.tracingStarted([
+      { frame: 'TAB1', processId: 200, isOutermostMainFrame: true },
+      { frame: 'TAB2', processId: 300, isOutermostMainFrame: true },
+    ]);
+    b.threadName(200, 9, 'DedicatedWorker thread');
+    b.threadName(300, 8, 'OtherTabWorker');
+    const nodes = [{ id: 1, functionName: '(root)' }, { id: 2, parent: 1, functionName: 'f', url: 'https://x.test/a.js' }];
+    b.profile({ pid: 300, tid: 8, id: '0x1', nodes, samples: [2, 2], deltas: [0, 1000] });
+    const only = analyze(b.events, { sections: ['summary', 'functions', 'scripts'] });
+    const md = render(only, { format: 'md' });
+    assert.ok(!md.includes('OtherTabWorker') && !md.includes('300:8'), md);
+    assert.match(md, /No CPU profile for this page/);
+    assert.match(md, /CPU profile: none for this page/);
+    b.profile({ pid: 200, tid: 9, id: '0x2', nodes, samples: [2, 2], deltas: [0, 1000] });
+    const withWorker = render(analyze(b.events, { sections: ['functions'] }), { format: 'md' });
+    assert.match(withWorker, /Profiled threads in this page's process: DedicatedWorker thread \(200:9\)\./);
+    assert.ok(!withWorker.includes('OtherTabWorker') && !withWorker.includes('300:8'));
+  });
+
   it('4: CrBrowserMain when there is no renderer', () => {
     const b = new TraceBuilder().threadName(1, 1, 'CrBrowserMain').x('X', BASE, 1, { pid: 1, tid: 1 });
     b.threadName(2, 2, 'Busy').x('Y', BASE, 1000, { pid: 2, tid: 2 });
