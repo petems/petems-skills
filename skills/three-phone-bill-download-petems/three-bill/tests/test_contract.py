@@ -17,7 +17,13 @@ from skill_browser.months import parse_month
 
 from three_bill import contract
 from three_bill.contract import Bill
-from three_bill.my3 import Site, auth_barrier, is_account_url, validate_pdf
+from three_bill.my3 import (
+    Site,
+    auth_barrier,
+    is_account_url,
+    recovery_step,
+    validate_pdf,
+)
 
 
 def _bill_entry(number="116", close="2026-07-24T00:00:00Z", amount=33.08, month=5):
@@ -453,3 +459,19 @@ def test_pdf_rejected(status, ctype, body, code):
     with pytest.raises(PdfInvalidError) as info:
         validate_pdf(status, ctype, body)
     assert info.value.code == code
+
+
+@pytest.mark.parametrize(
+    ("url", "step"),
+    [
+        ("https://www.three.co.uk/account", "account"),
+        ("https://www.three.co.uk/account/bills", "account"),
+        ("https://auth.three.co.uk/authorize?client_id=x", "auth_silent"),
+        ("https://auth.three.co.uk/u/login?state=x", "auth_form"),
+        ("https://www.three.co.uk/customer-login", "sign_in_route"),
+        ("https://www.three.co.uk/customer-logged", "landing"),
+        ("https://www.three.co.uk/", "landing"),
+    ],
+)
+def test_recovery_step(url, step):
+    assert recovery_step(url, Site()) == step
