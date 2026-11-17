@@ -1,0 +1,48 @@
+[project]
+name = "hyperoptic-bill"
+version = "0.1.0"
+description = "Download Hyperoptic broadband bill PDFs, driving a dedicated Patchright Chromium profile."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    # Shared browser plumbing. Inside the repo, the workspace root overrides
+    # this with the local packages/skill-browser (see ../../../pyproject.toml).
+    "skill-browser @ git+https://github.com/petems/petems-skills@skill-browser-v0.1.0#subdirectory=packages/skill-browser",
+]
+
+[project.scripts]
+hyperoptic-bill = "hyperoptic_bill.cli:main"
+
+[build-system]
+requires = ["setuptools>=75.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["hyperoptic_bill*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+    "pytest-asyncio>=1.0.0",
+    "ruff>=0.11.11",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+markers = [
+    # Needs a real Chromium. Loads no Hyperoptic page: a local fake of the
+    # account site is served from 127.0.0.1, so it stays offline.
+    "browser: drives a real Chromium against a local fake of the Hyperoptic account site",
+]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "RUF"]
+
+[tool.ruff.lint.isort]
+force-sort-within-sections = true
