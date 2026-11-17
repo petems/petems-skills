@@ -110,6 +110,37 @@ describe('CPU profile', () => {
     assert.equal(a.total.get(p.frames.findIndex((f) => f.functionName === 'd1')), 2000);
   });
 
+  it('many samples on a deep recursive stack aggregate in linear time with correct totals', () => {
+    // main -> rec0 -> rec1 -> ... -> rec49 -> rec0 -> ... (20,000 deep), plus
+    // a shallow side branch. Walking every sample's whole stack would cost
+    // 20,000 x 20,000 steps per aggregation.
+    const N = 20_000;
+    const url = 'https://a.test/r.js';
+    const nodes = [{ id: 1, functionName: 'main', url, lineNumber: 1000 }];
+    for (let id = 2; id <= N; id++) nodes.push({ id, parent: id - 1, functionName: `rec${id % 50}`, url, lineNumber: id % 50 });
+    nodes.push({ id: N + 1, parent: 1, functionName: 'side', url, lineNumber: 2000 });
+    const samples = new Array(N).fill(N);
+    samples[N - 1] = N + 1;
+    const deltas = new Array(N).fill(1000);
+    const b = new TraceBuilder().mainThread();
+    // 100 long tasks so the long-task section aggregates once per task
+    for (let k = 0; k < 100; k++) b.x('RunTask', BASE + k * 200_000, 100_000);
+    b.profile({ nodes, samples, deltas });
+    const p = buildProfiles(collectEvents(b.events).profiles);
+    const a = aggregateSamples(p, [...p.threads.values()][0], -Infinity, Infinity);
+    const fi = (name) => p.frames.findIndex((f) => f.functionName === name);
+    assert.equal(a.total.size, 52);
+    assert.equal(a.total.get(fi('main')), N * 1000);
+    assert.equal(a.total.get(fi('side')), 1000);
+    for (let r = 0; r < 50; r++) assert.equal(a.total.get(fi(`rec${r}`)), (N - 1) * 1000, `rec${r} counted once per sample`);
+    assert.equal(a.self.get(fi(`rec${N % 50}`)), (N - 1) * 1000);
+    const t0 = performance.now();
+    const r = analyze(b.events, { sections: ['summary', 'functions', 'scripts', 'longtasks'], top: 200 });
+    const elapsed = performance.now() - t0;
+    assert.equal(r.sections.find((s) => s.key === 'longtasks').data.rows.length, 100);
+    assert.ok(elapsed < 1000, `full analysis took ${elapsed.toFixed(0)} ms`);
+  });
+
   it('counts only the part of each sample inside a half-open range', () => {
     // samples at 0, 1000, 2000, 3000 (relative), each lasting 1000 us
     const { p } = prof({ samples: [5, 5, 5, 5], deltas: [0, 1000, 1000, 1000], chunks: 1 });

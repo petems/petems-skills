@@ -222,14 +222,19 @@ export function lowerBound(times, t) {
  * [start, end). Each sample covers [t, t + dur); only the part that overlaps
  * the range counts, so totals never exceed the range and a sample starting
  * exactly at `end` belongs to whatever comes next (adjacent tasks never
- * share a sample). Adds into `acc` (created when omitted).
+ * share a sample). Adds into `acc` (created when omitted). Pass
+ * `{ inclusive: false }` to skip inclusive totals when only self time is
+ * needed (their cost grows with stack depth, not sample count).
  */
-export function aggregateSamples(prof, th, start, end, acc) {
+export function aggregateSamples(prof, th, start, end, acc, { inclusive = true } = {}) {
   const a = acc || { self: new Map(), total: new Map(), idle: 0, program: 0, gc: 0, other: 0, sampled: 0, first: Infinity, last: -Infinity, count: 0 };
   const { times, durs, node } = th;
   const nodes = prof.nodes;
   const lo = Number.isFinite(start) ? start : -Infinity;
   const hi = Number.isFinite(end) ? end : Infinity;
+  // Sampled time per profile node; inclusive totals are derived from it
+  // once per call instead of walking every sample's whole stack.
+  const selfByNode = new Map();
   let i = Number.isFinite(start) ? lowerBound(times, start) : 0;
   // Samples that start before the range may still run into it.
   while (i > 0 && times[i - 1] + durs[i - 1] > lo) i--;
@@ -258,30 +263,67 @@ export function aggregateSamples(prof, th, start, end, acc) {
       case KIND_ROOT:
         a.other += d;
         break;
-      default: {
+      default:
         a.self.set(nd.frame, (a.self.get(nd.frame) || 0) + d);
-        // Inclusive time: each distinct frame on the stack once per sample,
-        // so recursion does not double count.
-        const seen = ancestorStamp(prof);
-        for (let g = node[i]; g >= 0; g = nodes[g].parent) {
-          const f = nodes[g].frame;
-          if (f < 0 || seen.marks[f] === seen.stamp) continue;
-          seen.marks[f] = seen.stamp;
-          a.total.set(f, (a.total.get(f) || 0) + d);
-        }
-      }
+        if (inclusive) selfByNode.set(node[i], (selfByNode.get(node[i]) || 0) + d);
     }
   }
+  addInclusive(prof, selfByNode, a.total);
   return a;
 }
 
-/** Per-profile scratch marks for de-duplicating frames on one sample's stack. */
-function ancestorStamp(prof) {
-  let s = prof._stamp;
-  if (!s || s.marks.length < prof.frames.length) s = prof._stamp = { marks: new Int32Array(prof.frames.length), stamp: 0 };
-  if (++s.stamp > 0x7fffffff) {
-    s.marks.fill(0);
-    s.stamp = 1;
+/**
+ * Add inclusive (total) time per frame into `total`, given the sampled time
+ * per node. Each frame is credited once per sample (at its outermost
+ * occurrence on the stack), so recursion does not double count. Linear in
+ * the number of sampled nodes plus their ancestors: walking each sample's
+ * whole stack would be quadratic on a deep profile.
+ */
+function addInclusive(prof, selfByNode, total) {
+  if (selfByNode.size === 0) return;
+  const nodes = prof.nodes;
+  // Subtree time for every sampled node and its ancestors. The ancestor
+  // walk stops at a node already collected, so each node is visited once.
+  const sub = new Map();
+  for (const [g, d] of selfByNode) {
+    for (let n = g; n >= 0 && !sub.has(n); n = nodes[n].parent) sub.set(n, 0);
+    sub.set(g, sub.get(g) + d);
   }
-  return s;
+  // buildProfiles creates every parent before its children, so a parent's
+  // index is always lower: visiting indices high to low sees children first.
+  const order = Int32Array.from(sub.keys()).sort();
+  const children = new Map();
+  const roots = [];
+  for (let k = order.length - 1; k >= 0; k--) {
+    const g = order[k];
+    const par = nodes[g].parent;
+    if (par < 0) {
+      roots.push(g);
+      continue;
+    }
+    sub.set(par, sub.get(par) + sub.get(g));
+    let c = children.get(par);
+    if (!c) children.set(par, (c = []));
+    c.push(g);
+  }
+  // Iterative DFS (stacks can be very deep) counting how often each frame
+  // is on the current path. A node whose frame is not yet on the path is
+  // that frame's outermost occurrence for every sample below it.
+  let onPath = prof._onPath;
+  if (!onPath || onPath.length < prof.frames.length) onPath = prof._onPath = new Int32Array(prof.frames.length);
+  const stack = roots;
+  while (stack.length) {
+    const e = stack.pop();
+    if (e < 0) {
+      onPath[nodes[~e].frame]--;
+      continue;
+    }
+    const f = nodes[e].frame;
+    if (f >= 0) {
+      if (onPath[f]++ === 0) total.set(f, (total.get(f) || 0) + sub.get(e));
+      stack.push(~e);
+    }
+    const c = children.get(e);
+    if (c) for (let k = 0; k < c.length; k++) stack.push(c[k]);
+  }
 }

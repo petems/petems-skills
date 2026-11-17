@@ -172,8 +172,13 @@ Semantics:
   excluded from the function table. `(idle)` is reported as idle time;
   `(program)` and `(garbage collector)` are reported as separate header lines.
 * Self time per frame (same functionName + url + line + col = same frame).
-  Inclusive (total) time per frame: walk ancestors, counting each distinct
-  frame once per sample so recursion does not double count.
+  Inclusive (total) time per frame: each distinct frame on a sample's stack
+  counts once per sample so recursion does not double count. Compute it in
+  time linear in the number of sampled nodes plus their ancestors (sum sampled
+  time per node, roll it up the tree, credit each frame at its outermost
+  occurrence on each path), never by walking every sample's whole stack, which
+  is quadratic on a deep profile. Callers that only need self time (summary,
+  per long task top JS) skip inclusive totals entirely.
 * Profiles are per thread. The functions table defaults to main-thread
   profiles (respecting `--thread`), with a `thread` column when more than one
   thread contributes. Percentages are of that scope's non-idle sampled time.
@@ -468,7 +473,10 @@ node scripts/simplify-chrome-trace.mjs <trace.json[.gz]> [options]
   control, bidi and zero-width characters removed, so it cannot start its
   own markdown lines or hide what it says. This covers table cells and every
   piece of prose built from the trace: thread and process names (cleaned when
-  collected), the file name, metadata fields and warnings.
+  collected), the file name, metadata fields and warnings. JSON output gets
+  the same cleaning: every string in the document (keys included, except the
+  fixed `notice`) is cleaned before serialization, so parsed values carry no
+  newline, control, bidi or zero-width characters.
 
 * Markdown tables in compact style (`| a | b |`, separator `| --- | --- |`,
   empty cells as a single space) so they pass markdownlint. Cell contents escaped:
@@ -497,7 +505,8 @@ node scripts/simplify-chrome-trace.mjs <trace.json[.gz]> [options]
   thread detection order; window overlap clipping; windows outside the
   trace; other tabs' CPU profiles left out; per-sample window
   filtering; sample duration semantics and median last sample; 0-based to
-  1-based line numbers; recursion not double counting totals; long task
+  1-based line numbers; recursion not double counting totals; deep stacks
+  with many samples aggregating in linear time; long task
   artifact subtraction; TBT; timeline split across buckets never exceeding
   100%; quiet bucket collapsing; interactions phases and INP rule; marks;
   network rollup and URL truncation; websocket grouping; markdown escaping;

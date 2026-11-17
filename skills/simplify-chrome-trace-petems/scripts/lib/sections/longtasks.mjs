@@ -57,7 +57,7 @@ function insideNames(ctx, selected) {
 function topJs(ctx, s) {
   const pt = ctx.prof.threads.get(s.thread.key);
   if (!pt) return [];
-  const a = aggregateSamples(ctx.prof, pt, s.task.ts, s.task.end);
+  const a = aggregateSamples(ctx.prof, pt, s.task.ts, s.task.end, undefined, { inclusive: false });
   return [...a.self.entries()]
     .sort((x, y) => y[1] - x[1] || x[0] - y[0])
     .slice(0, 2)

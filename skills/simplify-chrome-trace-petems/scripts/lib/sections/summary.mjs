@@ -81,7 +81,7 @@ export function compute(ctx) {
       otherProfiles++;
       continue;
     }
-    const a = aggregateSamples(ctx.prof, pt, ctx.win.start, ctx.win.end);
+    const a = aggregateSamples(ctx.prof, pt, ctx.win.start, ctx.win.end, undefined, { inclusive: false });
     const th = ctx.threadByKey.get(pt.key);
     profiles.push({
       thread: th ? threadShort(th) : pt.key,
