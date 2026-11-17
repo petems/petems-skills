@@ -4,25 +4,40 @@
   <meta charset="utf-8">
   <title>simplify-chrome-trace demo</title>
   <style>
-    body { font: 14px system-ui, sans-serif; margin: 2rem; }
-    #grid { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 1rem; }
-    .box { width: 24px; height: 24px; background: #8ab; }
-    #ticker { margin-top: 1rem; color: #567; }
+    body { font: 15px system-ui, sans-serif; margin: 1.5rem 2rem; color: #223; }
+    h1 { font-size: 1.3rem; margin: 0 0 0.3rem; }
+    p { margin: 0 0 0.8rem; color: #556; }
+    .lane { position: relative; height: 34px; margin: 0.4rem 0; background: #eef1f5; border-radius: 17px; }
+    .lane span { position: absolute; left: 12px; top: 8px; font-size: 13px; color: #778; }
+    .ball { position: absolute; top: 3px; left: 0; width: 28px; height: 28px; border-radius: 50%; }
+    #js-ball { background: #d9534f; }
+    #css-ball { background: #3c8d5a; animation: slide 2s ease-in-out infinite alternate; }
+    @keyframes slide { from { transform: translateX(0); } to { transform: translateX(520px); } }
+    #stats { font: 600 15px ui-monospace, monospace; margin: 0.6rem 0; }
+    #stats .bad { color: #c0392b; }
+    button { font: inherit; padding: 0.35rem 0.8rem; margin-right: 0.4rem; }
+    #grid { display: flex; flex-wrap: wrap; gap: 1px; margin-top: 0.8rem; width: 640px; }
+    .box { width: 6px; height: 6px; background: #8ab; }
   </style>
 </head>
 <body>
   <h1>Deliberately slow demo page</h1>
-  <p>Each problem below is intentional so the example trace has something to find.</p>
+  <p>The red ball is moved by JavaScript on the main thread, so it freezes when the
+     main thread is blocked. The green ball is a CSS animation on the compositor and
+     keeps moving.</p>
+  <div class="lane"><span>main thread (JS)</span><div class="ball" id="js-ball"></div></div>
+  <div class="lane"><span>compositor (CSS)</span><div class="ball" id="css-ball"></div></div>
+  <div id="stats">clock: <span id="clock">0</span> ms | worst frame gap: <span id="worst">0</span> ms</div>
   <button id="thrash">Resize boxes (layout thrashing)</button>
   <button id="crunch">Crunch numbers (fast, for contrast)</button>
-  <div id="ticker">ticks: 0</div>
   <div id="grid"></div>
 
   <script>
     // Problem 1: a long task during start-up (blocking "config parsing").
+    // The page stays blank until it finishes.
     performance.mark('demo:boot-start');
     function parseConfig() {
-      const end = performance.now() + 180;
+      const end = performance.now() + 600;
       let acc = 0;
       while (performance.now() < end) acc += Math.sqrt(acc + 1);
       return acc;
@@ -32,22 +47,25 @@
     performance.measure('demo:boot', 'demo:boot-start', 'demo:boot-end');
 
     const grid = document.getElementById('grid');
-    for (let i = 0; i < 400; i++) {
+    for (let i = 0; i < 3000; i++) {
       const d = document.createElement('div');
       d.className = 'box';
       grid.appendChild(d);
     }
 
     // Problem 2: layout thrashing. Each iteration writes a style and then
-    // reads layout, forcing a synchronous style recalc + layout every time.
+    // reads layout, forcing a synchronous style recalc + layout of the whole
+    // 3,000-box flex container every time. The red ball and the clock freeze
+    // for about a second.
+    let clicks = 0;
     function resizeBoxes() {
       performance.mark('demo:thrash-start');
       console.timeStamp('demo: resize clicked');
+      clicks++;
       const boxes = grid.querySelectorAll('.box');
-      for (let round = 0; round < 6; round++) {
-        for (const box of boxes) {
-          box.style.width = (20 + ((round + box.offsetTop) % 12)) + 'px';
-        }
+      for (let i = 0; i < 1000; i++) {
+        const box = boxes[i];
+        box.style.width = (4 + ((i + clicks + box.offsetTop) % 5)) + 'px';
       }
       performance.mark('demo:thrash-end');
       performance.measure('demo:thrash', 'demo:thrash-start', 'demo:thrash-end');
@@ -66,16 +84,32 @@
     }
     document.getElementById('crunch').addEventListener('click', crunchNumbers);
 
-    // Problem 4: work that happens too often. A timer and an animation loop
-    // that update the DOM every frame even though nothing meaningful changes.
-    let ticks = 0;
-    const ticker = document.getElementById('ticker');
-    setInterval(() => { ticks++; ticker.textContent = 'ticks: ' + ticks; }, 16);
-    function spin() {
-      grid.firstChild.style.opacity = String(0.5 + (performance.now() % 1000) / 2000);
-      requestAnimationFrame(spin);
+    // Problem 3: work that happens too often. A 16 ms timer and an animation
+    // loop both touch the DOM every frame. The loop also drives the red ball,
+    // the clock and the worst-frame readout, which make jank visible.
+    const jsBall = document.getElementById('js-ball');
+    const clock = document.getElementById('clock');
+    const worst = document.getElementById('worst');
+    const t0 = performance.now();
+    let last = t0;
+    let worstGap = 0;
+    function frame(now) {
+      const gap = now - last;
+      last = now;
+      if (gap > worstGap) {
+        worstGap = gap;
+        worst.textContent = Math.round(worstGap);
+        if (worstGap > 100) worst.className = 'bad';
+      }
+      const phase = ((now - t0) / 2000) % 2;
+      const x = (phase < 1 ? phase : 2 - phase) * 520;
+      jsBall.style.transform = `translateX(${x}px)`;
+      clock.textContent = Math.round(now - t0);
+      requestAnimationFrame(frame);
     }
-    requestAnimationFrame(spin);
+    requestAnimationFrame(frame);
+    let ticks = 0;
+    setInterval(() => { ticks++; grid.firstChild.style.opacity = String(0.6 + (ticks % 40) / 100); }, 16);
 
     // Network: a couple of local requests, one deliberately slow.
     fetch('data.json').then((r) => r.json());

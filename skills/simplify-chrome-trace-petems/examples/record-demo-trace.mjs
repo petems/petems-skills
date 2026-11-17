@@ -1,15 +1,23 @@
 #!/usr/bin/env node
-// Record examples/demo-trace.json.gz from the local demo page.
+// Record examples/demo-trace.json.gz (and a screen recording of the same
+// session) from the local demo page.
 //
 // Launches a throwaway headless Chrome profile (no extensions, no history),
 // serves examples/demo/ on 127.0.0.1, records a DevTools-style trace over the
 // Chrome DevTools Protocol while clicking the demo buttons, then checks the
 // trace for anything that should not be published before writing it.
 //
-// Usage: node examples/record-demo-trace.mjs [--chrome PATH] [--out FILE]
-// Needs Node 22+ (global WebSocket) and a local Chrome or Chromium.
+// The video is captured in the same session as the trace with the CDP
+// screencast (headless Chrome does not put filmstrip screenshots into the
+// trace). Frames are encoded to demo-recording.mp4 / .gif with ffmpeg, so the
+// video and the trace describe exactly the same run. The screencast adds a
+// little browser-side overhead to the recording.
+//
+// Usage: node examples/record-demo-trace.mjs [--chrome PATH] [--out FILE] [--no-video]
+// Needs Node 22+ (global WebSocket), a local Chrome or Chromium, and ffmpeg
+// on PATH for the video.
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir, homedir, hostname, userInfo } from 'node:os';
@@ -25,9 +33,10 @@ const argValue = (flag) => {
 };
 const outFile = argValue('--out') || join(here, 'demo-trace.json.gz');
 const chromePath = argValue('--chrome') || process.env.CHROME_PATH || findChrome();
+const wantVideo = !args.includes('--no-video');
+const VIEWPORT = { width: 720, height: 400 };
 
-// Close to what the DevTools Performance panel records, minus screenshots
-// (they would bloat the file without helping the summariser).
+// Close to what the DevTools Performance panel records, minus screenshots.
 const CATEGORIES = [
   '-*',
   'blink.console',
@@ -241,10 +250,21 @@ async function main() {
     const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
     const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
     await cdp.send('Page.enable', {}, sessionId);
+    await cdp.send('Emulation.setDeviceMetricsOverride', { ...VIEWPORT, deviceScaleFactor: 1, mobile: false }, sessionId);
 
     const events = [];
     cdp.on('Tracing.dataCollected', (p) => events.push(...p.value));
     const done = new Promise((resolve) => cdp.on('Tracing.tracingComplete', resolve));
+
+    // Screencast frames arrive only after each one is acknowledged.
+    const screenshots = [];
+    cdp.on('Page.screencastFrame', (p, sid) => {
+      screenshots.push({ ts: p.metadata.timestamp * 1e6, data: p.data });
+      cdp.send('Page.screencastFrameAck', { sessionId: p.sessionId }, sid).catch(() => {});
+    });
+    if (wantVideo) {
+      await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 70, ...{ maxWidth: VIEWPORT.width, maxHeight: VIEWPORT.height } }, sessionId);
+    }
 
     const startTime = new Date().toISOString();
     await cdp.send('Tracing.start', {
@@ -256,18 +276,22 @@ async function main() {
     const loaded = new Promise((resolve) => cdp.on('Page.loadEventFired', resolve));
     await cdp.send('Page.navigate', { url: `http://127.0.0.1:${port}/` }, sessionId);
     await loaded;
-    await sleep(800);
+    // Pauses are long enough for a viewer to see smooth motion between the
+    // freezes.
+    await sleep(1800);
     await click(cdp, sessionId, '#thrash');
-    await sleep(600);
+    await sleep(1800);
     await click(cdp, sessionId, '#crunch');
-    await sleep(600);
+    await sleep(1500);
     await click(cdp, sessionId, '#thrash');
-    await sleep(800);
+    await sleep(1800);
 
+    if (wantVideo) await cdp.send('Page.stopScreencast', {}, sessionId);
     await cdp.send('Tracing.end');
     await done;
 
-    const kept = keepPageEvents(events, port);
+    const traceEvents = events;
+    const kept = keepPageEvents(traceEvents, port);
     if (process.env.DEBUG_DROPPED) reportDropped(events, kept);
     const trace = { metadata: { source: 'record-demo-trace.mjs', startTime }, traceEvents: kept };
     const text = JSON.stringify(trace);
@@ -279,14 +303,50 @@ async function main() {
     const gz = gzipSync(portless, { level: 9 });
     writeFileSync(outFile, gz);
     console.log(
-      `Wrote ${outFile}: ${kept.length} of ${events.length} events kept, ${(portless.length / 1e6).toFixed(1)} MB raw, ${(gz.length / 1024).toFixed(0)} KB gzipped`,
+      `Wrote ${outFile}: ${kept.length} of ${traceEvents.length} events kept, ${(portless.length / 1e6).toFixed(1)} MB raw, ${(gz.length / 1024).toFixed(0)} KB gzipped`,
     );
+    if (wantVideo) writeVideo(screenshots, join(dirname(outFile), 'demo-recording'));
   } finally {
     cdp.close();
     chrome.kill();
     server.close();
     await sleep(300);
     rmSync(profileDir, { recursive: true, force: true });
+  }
+}
+
+// Encode the screencast frames into an MP4 and a GIF. Frames are only
+// captured when the screen changes, so each one is held until the next.
+function writeVideo(screenshots, basePath) {
+  if (!screenshots.length) throw new Error('The screencast captured no frames, so there is no video to write');
+  const ffmpeg = spawnSync('ffmpeg', ['-version']);
+  if (ffmpeg.status !== 0) throw new Error('ffmpeg not found on PATH (or pass --no-video)');
+  const frames = screenshots.slice().sort((a, b) => a.ts - b.ts);
+  const dir = mkdtempSync(join(tmpdir(), 'demo-frames-'));
+  try {
+    const list = [];
+    frames.forEach((f, i) => {
+      const name = `f${String(i).padStart(5, '0')}.jpg`;
+      writeFileSync(join(dir, name), Buffer.from(f.data, 'base64'));
+      const next = frames[i + 1];
+      const secs = next ? (next.ts - f.ts) / 1e6 : 1;
+      list.push(`file '${name}'`, `duration ${secs.toFixed(6)}`);
+    });
+    // The concat demuxer ignores the last duration unless the file repeats.
+    list.push(`file 'f${String(frames.length - 1).padStart(5, '0')}.jpg'`);
+    writeFileSync(join(dir, 'frames.txt'), list.join('\n') + '\n');
+    const input = ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', join(dir, 'frames.txt')];
+    const run = (extra) => {
+      const r = spawnSync('ffmpeg', [...input, ...extra], { encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`ffmpeg failed: ${r.stderr}`);
+    };
+    run(['-vf', 'fps=30,scale=trunc(iw/2)*2:trunc(ih/2)*2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '28', '-movflags', '+faststart', `${basePath}.mp4`]);
+    run(['-vf', 'fps=15,split[a][b];[a]palettegen=max_colors=64[p];[b][p]paletteuse=dither=none', `${basePath}.gif`]);
+    const kb = (p) => (readFileSync(p).length / 1024).toFixed(0);
+    const secs = (frames[frames.length - 1].ts - frames[0].ts) / 1e6;
+    console.log(`Wrote ${basePath}.mp4 (${kb(`${basePath}.mp4`)} KB) and .gif (${kb(`${basePath}.gif`)} KB): ${frames.length} frames, ${secs.toFixed(1)} s`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 }
 

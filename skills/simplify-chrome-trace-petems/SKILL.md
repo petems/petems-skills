@@ -143,8 +143,11 @@ Opt-in: `timeline`, `scripts`, `network`, `websocket`.
   problems (a start-up long task, layout thrashing on click, a timer and
   animation loop that fire every frame, a slow request). Use it to see
   what each section looks like, or to sanity-check the script.
-- `examples/record-demo-trace.mjs`: re-records the example in a throwaway
-  headless Chrome profile, keeps only the demo page's renderer process,
-  and refuses to write the file if it finds non-demo URLs, extension
-  URLs, or local paths.
+  `examples/demo-recording.mp4` / `.gif` is a screen recording of the
+  same session, and `examples/README.md` maps what you see in it to what
+  the report says.
+- `examples/record-demo-trace.mjs`: re-records the trace and video in a
+  throwaway headless Chrome profile, keeps only the demo page's renderer
+  process, and refuses to write the file if it finds non-demo URLs,
+  extension URLs, or local paths.
 - Tests: `cd skills/simplify-chrome-trace-petems && npm test`.
