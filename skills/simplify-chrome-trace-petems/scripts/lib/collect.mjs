@@ -536,35 +536,61 @@ export class TraceCollector {
  * @returns {{frame:string, finished:boolean, ambiguous:boolean, events:any[]}[]}
  */
 export function nonRendererInstances(events) {
+  // Indexes instead of rescanning history, so an id reused by many
+  // sequential requests stays linear. At most one instance per frame is ever
+  // open: a framed event only starts or adopts one when none is open.
   const insts = [];
+  const order = new Map(); // instance -> creation index
+  const open = new Set(); // unfinished instances
+  const openFrameless = new Set(); // unfinished instances with no frame yet
+  const openByFrame = new Map(); // frame -> its unfinished instance
+  const latestByFrame = new Map(); // frame -> latest created instance with that frame
+  const only = (set) => set.values().next().value;
+  const setLatest = (inst) => {
+    const cur = latestByFrame.get(inst.frame);
+    if (!cur || order.get(cur) < order.get(inst)) latestByFrame.set(inst.frame, inst);
+  };
   let ambiguous = null;
   const start = (frame) => {
     const inst = { frame, finished: false, ambiguous: false, events: [] };
+    order.set(inst, insts.length);
     insts.push(inst);
+    open.add(inst);
+    if (frame) {
+      openByFrame.set(frame, inst);
+      setLatest(inst);
+    } else openFrameless.add(inst);
     return inst;
   };
   const sorted = events.map((e, i) => [e, i]).sort((a, b) => a[0].ts - b[0].ts || a[1] - b[1]).map(([e]) => e);
   for (const e of sorted) {
     const isSend = e.name === 'ResourceSendRequest';
-    const open = insts.filter((x) => !x.finished);
     let inst;
     if (e.frame) {
-      inst = open.findLast((x) => x.frame === e.frame);
-      if (!inst && !isSend) inst = insts.findLast((x) => x.frame === e.frame);
-      if (!inst) {
-        const frameless = open.filter((x) => !x.frame);
-        if (frameless.length === 1) (inst = frameless[0]).frame = e.frame;
+      inst = openByFrame.get(e.frame);
+      if (!inst && !isSend) inst = latestByFrame.get(e.frame);
+      if (!inst && openFrameless.size === 1) {
+        inst = only(openFrameless);
+        inst.frame = e.frame;
+        openFrameless.delete(inst);
+        openByFrame.set(e.frame, inst);
+        setLatest(inst);
       }
       if (!inst) inst = start(e.frame);
-    } else if (open.length === 1) inst = open[0];
+    } else if (open.size === 1) inst = only(open);
     else if (isSend) inst = start('');
-    else if (open.length === 0 && insts.length <= 1) inst = insts[0] || start('');
+    else if (open.size === 0 && insts.length <= 1) inst = insts[0] || start('');
     else {
       if (!ambiguous) ambiguous = { frame: '', finished: false, ambiguous: true, events: [] };
       inst = ambiguous;
     }
     inst.events.push(e);
-    if (e.name === 'ResourceFinish' && !inst.ambiguous) inst.finished = true;
+    if (e.name === 'ResourceFinish' && !inst.ambiguous && !inst.finished) {
+      inst.finished = true;
+      open.delete(inst);
+      if (inst.frame) openByFrame.delete(inst.frame);
+      else openFrameless.delete(inst);
+    }
   }
   if (ambiguous) insts.push(ambiguous);
   return insts;

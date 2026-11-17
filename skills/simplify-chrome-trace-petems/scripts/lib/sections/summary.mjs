@@ -1,6 +1,6 @@
 // summary: header block.
 
-import { fmtMs, fmtCount, fmtPct, round3, cleanText } from '../format.mjs';
+import { fmtMs, fmtCount, fmtPct, round3, cleanText, mdText } from '../format.mjs';
 import { overlap } from '../nesting.mjs';
 import { aggregateSamples } from '../profile.mjs';
 import { threadLabel, threadShort } from '../threads.mjs';
@@ -102,6 +102,7 @@ export function compute(ctx) {
   return {
     // Everything the summary prints outside a table is cleaned: it can come
     // from the trace (metadata, thread names) and must not start its own lines.
+    // md() also escapes it (mdText) so it cannot form links, images or HTML.
     file: cleanText(ctx.fileName),
     fileSize: ctx.fileSize,
     eventCount: ctx.model.eventCount,
@@ -132,13 +133,13 @@ function fmtSize(bytes) {
 }
 
 export function md(d, report) {
-  const lines = [`# Trace summary: ${d.file}`, ''];
+  const lines = [`# Trace summary: ${mdText(d.file)}`, ''];
   const size = fmtSize(d.fileSize);
   lines.push(`- File: ${size ? size + ', ' : ''}${fmtCount(d.eventCount)} events`);
   if (d.source || d.startTime) {
     const parts = [];
-    if (d.source) parts.push(`source ${d.source}`);
-    if (d.startTime) parts.push(`started ${d.startTime}`);
+    if (d.source) parts.push(`source ${mdText(d.source)}`);
+    if (d.startTime) parts.push(`started ${mdText(d.startTime)}`);
     lines.push(`- Recording: ${parts.join(', ')}`);
   }
   lines.push(`- Span: ${fmtMs(d.spanMs)} ms`);
@@ -147,15 +148,15 @@ export function md(d, report) {
       `- Window (${d.window.source}): ${fmtMs(d.window.startMs)}-${fmtMs(d.window.endMs)} ms (${fmtMs(d.window.durationMs)} ms, ${fmtCount(d.window.eventCount)} events)`,
     );
   }
-  if (d.mainThreads.length === 0) lines.push(`- Main thread: none (${d.threadReason})`);
+  if (d.mainThreads.length === 0) lines.push(`- Main thread: none (${mdText(d.threadReason)})`);
   else {
-    const names = d.mainThreads.map((t) => t.label).join('; ');
-    lines.push(`- Main thread${d.mainThreads.length > 1 ? 's' : ''}: ${names}, chosen by ${d.threadReason}`);
+    const names = d.mainThreads.map((t) => mdText(t.label)).join('; ');
+    lines.push(`- Main thread${d.mainThreads.length > 1 ? 's' : ''}: ${names}, chosen by ${mdText(d.threadReason)}`);
   }
   if (d.profiles.length === 0) lines.push(d.otherProfiles ? '- CPU profile: none for this page' : '- CPU profile: none');
   for (const p of d.profiles) {
     lines.push(
-      `- CPU profile ${p.thread} (${p.pid}:${p.tid}): sampled ${fmtMs(p.spanMs)} ms, busy ${fmtMs(p.busyMs)} ms, idle ${fmtMs(p.idleMs)} ms, program ${fmtMs(p.programMs)} ms, GC ${fmtMs(p.gcMs)} ms`,
+      `- CPU profile ${mdText(p.thread)} (${mdText(`${p.pid}:${p.tid}`)}): sampled ${fmtMs(p.spanMs)} ms, busy ${fmtMs(p.busyMs)} ms, idle ${fmtMs(p.idleMs)} ms, program ${fmtMs(p.programMs)} ms, GC ${fmtMs(p.gcMs)} ms`,
     );
   }
   if (d.otherProfiles) lines.push(`- CPU profiles left out: ${fmtCount(d.otherProfiles)} from other processes (use --thread all to include them)`);
@@ -166,7 +167,7 @@ export function md(d, report) {
   const warnings = (report && report.warnings) || [];
   if (warnings.length) {
     lines.push('- Warnings:');
-    for (const w of warnings) lines.push(`  - ${cleanText(w)}`);
+    for (const w of warnings) lines.push(`  - ${mdText(w)}`);
   }
   return lines.join('\n');
 }

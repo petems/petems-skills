@@ -1,6 +1,6 @@
 // network: request waterfall.
 
-import { fmtMs, fmtCount, mdTable, round3, shortUrl, byStr } from '../format.mjs';
+import { fmtMs, fmtCount, mdTable, mdText, round3, shortUrl, byStr } from '../format.mjs';
 import { emptyBlock, heading, offsetFields, offsetHeaders, offsetCells, topN, moreLine, pageRecordFilter, omittedNote } from './common.mjs';
 
 /** Shape one collected request into a row (µs in, ms out). */
@@ -61,7 +61,7 @@ export function md(d) {
   const title = 'Network';
   if (!d.rows.length) return emptyBlock(title, d.note);
   const ru = d.rollup;
-  const rollup = `${fmtCount(ru.count)} request${ru.count === 1 ? '' : 's'}, ${fmtMs(ru.totalKB)} KB, ${fmtCount(ru.failed)} failed, slowest ${fmtMs(ru.slowestMs)} ms${ru.slowestUrl ? ` (${shortUrl(ru.slowestUrl)})` : ''}.`;
+  const rollup = `${fmtCount(ru.count)} request${ru.count === 1 ? '' : 's'}, ${fmtMs(ru.totalKB)} KB, ${fmtCount(ru.failed)} failed, slowest ${fmtMs(ru.slowestMs)} ms${ru.slowestUrl ? ` (${mdText(shortUrl(ru.slowestUrl))})` : ''}.`;
   const headers = [...offsetHeaders(d.hasUtc), 'ttfb (ms)', 'dur (ms)', 'size (KB)', 'status', 'method', 'url'];
   const rows = d.rows.map((r) => [...offsetCells(r, d.hasUtc), fmtMs(r.ttfbMs), fmtMs(r.durMs), fmtMs(r.sizeKB), statusCell(r), r.method || '-', shortUrl(r.url)]);
   return [heading(title), rollup, mdTable(headers, rows), moreLine(d.more), d.omitted].filter(Boolean).join('\n\n');

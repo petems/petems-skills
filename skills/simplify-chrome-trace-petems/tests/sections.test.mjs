@@ -8,6 +8,7 @@ import { clsSessions } from '../scripts/lib/sections/vitals.mjs';
 import { groupOf } from '../scripts/lib/sections/events.mjs';
 import { SECTION_KEYS } from '../scripts/lib/sections/index.mjs';
 import { TraceBuilder, BASE, richTrace } from './helpers/fixtures.mjs';
+import { collectEvents } from '../scripts/lib/collect.mjs';
 
 const section = (events, key, opts = {}) => analyze(events, { sections: [key], ...opts }).sections[0].data;
 const ms = (x) => x * 1000;
@@ -193,7 +194,7 @@ describe('timeline', () => {
     b.x('RunTask', BASE + ms(5000), ms(900));
     const md = render(analyze(b.events, { sections: ['timeline'], window: '0-500' }));
     assert.match(md, /\| 1000-5000 \| quiet \|/);
-    assert.match(md, /\| 0 \| 900\.0 \| 90\.0% \| #{18} \| <- window \|/);
+    assert.match(md, /\| 0 \| 900\.0 \| 90\.0% \| #{18} \| \\<- window \|/);
   });
 
   it('covers the whole trace even when a window is set', () => {
@@ -497,6 +498,24 @@ describe('network', () => {
     assert.match(md, /\| - \| - \| - \| - \| GET \| example\.com\/pending \|/);
     assert.equal(section(b.events, 'network', { match: 'pending' }).rows.length, 1);
     assert.equal(section(b.events, 'network', { window: '1.5-' }).rows.length, 2);
+  });
+  it('groups many sequential requests reusing one id in linear time', () => {
+    // Browser-process events: only the send carries the frame, and every
+    // request reuses the same id after the previous one finished.
+    const N = 100_000;
+    const events = [{ ph: 'M', name: 'thread_name', pid: 1, tid: 1, ts: 0, args: { name: 'CrBrowserMain' } }];
+    for (let i = 0; i < N; i++) {
+      const ts = BASE + i * 10;
+      events.push({ ph: 'I', name: 'ResourceSendRequest', cat: 'devtools.timeline', pid: 1, tid: 1, ts, s: 't', args: { data: { requestId: 'same', url: `https://x.test/${i}`, frame: 'PAGE' } } });
+      events.push({ ph: 'I', name: 'ResourceFinish', cat: 'devtools.timeline', pid: 1, tid: 1, ts: ts + 5, s: 't', args: { data: { requestId: 'same', encodedDataLength: 1 } } });
+    }
+    const t0 = performance.now();
+    const records = collectEvents(events).network;
+    const elapsed = performance.now() - t0;
+    assert.equal(records.length, N);
+    assert.equal(records[N - 1].url, `https://x.test/${N - 1}`);
+    assert.ok(records.every((r) => r.finishTs === r.sendTs + 5), 'each finish joins its own request');
+    assert.ok(elapsed < 1000, `took ${elapsed.toFixed(0)} ms`);
   });
 });
 

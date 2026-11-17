@@ -53,11 +53,31 @@ export function cleanText(v) {
   return s.replace(/\r\n|\r|\n|\t/g, ' ').replace(HIDDEN_CHARS, '');
 }
 
-/** Escape a markdown table cell. */
+// Markdown that could make trace text active in a preview: `[` `]` (links,
+// images, reference links), `<` `>` (autolinks, raw HTML), backticks (code
+// spans) and the backslash itself (so trace text cannot cancel an escape).
+// `!` and parentheses are inert once the brackets are escaped, so names such
+// as `(anonymous)` stay as they are.
+const MD_ACTIVE = /[\\`[\]<>]/g;
+
+function escapeMd(s) {
+  return s.replace(MD_ACTIVE, '\\$&');
+}
+
+/**
+ * Trace text for markdown prose (outside tables): cleaned, then with link,
+ * image, HTML and code-span syntax backslash-escaped so it renders as the
+ * literal text. JSON output uses cleanText only.
+ */
+export function mdText(v) {
+  return escapeMd(cleanText(v));
+}
+
+/** Escape a markdown table cell (cleaned, truncated, markdown and pipes escaped). */
 export function escapeCell(v) {
   let s = cleanText(v);
   if (s.length > MAX_CELL) s = s.slice(0, MAX_CELL - 3) + '...';
-  return s.replace(/\|/g, '\\|');
+  return escapeMd(s).replace(/\|/g, '\\|');
 }
 
 /** Render a markdown table. */
@@ -72,8 +92,9 @@ export function mdTable(headers, rows) {
   return out.join('\n');
 }
 
+/** Italic note; may name trace text (thread names), so it is escaped. */
 export function note(text) {
-  return `_${text}_`;
+  return `_${mdText(text)}_`;
 }
 
 /** Drop the URL scheme and middle-truncate to `max` chars (`start...end`). */

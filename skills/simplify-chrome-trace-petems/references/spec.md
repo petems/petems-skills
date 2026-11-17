@@ -248,7 +248,8 @@ note, so the agent knows it was checked.
   (20 chars = 100%).
 * Consecutive quiet buckets (busy < 5% of bucket) are collapsed into one row
   like `12000-17000 | quiet`.
-* If a window is set, rows overlapping it get the ASCII marker `<- window`.
+* If a window is set, rows overlapping it get the ASCII marker `<- window`
+  (written `\<- window` in the markdown source, see Output formatting).
 
 ### vitals
 
@@ -463,6 +464,14 @@ node scripts/simplify-chrome-trace.mjs <trace.json[.gz]> [options]
   line on stderr plus `Run with --help`, exit code 2.
 * `--out` stderr note: `Wrote <file> (<bytes> bytes) from <size> MB trace in
   <secs>s`.
+* `--out` never overwrites the input trace and never writes through a
+  symlink. Both are checked before analysis (fast failure) and again at write
+  time: the output is opened with `O_NOFOLLOW` and without `O_TRUNC`, the
+  opened file is compared (device and inode) with the input as stat'ed at
+  startup, and only then truncated and written. So a path swapped during
+  analysis for a symlink or hard link to the trace cannot destroy it, and a
+  planted symlink (for example in a shared `/tmp`) cannot redirect the write.
+  Each refusal is a one-line user error, exit code 1.
 
 ## Output formatting
 
@@ -477,11 +486,25 @@ node scripts/simplify-chrome-trace.mjs <trace.json[.gz]> [options]
   the same cleaning: every string in the document (keys included, except the
   fixed `notice`) is cleaned before serialization, so parsed values carry no
   newline, control, bidi or zero-width characters.
+* In markdown output, trace text is also backslash-escaped so a preview
+  cannot turn it into active markup: `\`, `` ` ``, `[`, `]`, `<` and `>`
+  get a leading `\`. That neutralises images and links (inline, reference
+  and `<...>` autolinks), raw HTML and code spans, so a page-controlled name
+  such as `![x](https://host/pixel)` or `<img src=...>` cannot make a viewer
+  load a remote resource. `!` and parentheses are left alone (inert once the
+  brackets are escaped), so names like `(anonymous)` or
+  `spa-federated.min.js:15:392547` read unchanged. Escaping applies to table
+  cells (after truncation) and to prose: the summary lines (file name,
+  metadata, thread labels, selection reason, warnings), the network
+  rollup's slowest URL and the italic notes. GFM previews may still
+  auto-link a bare `www.` or `https://` URL as a clickable link; that loads
+  nothing until clicked. JSON output is data and is not markdown-escaped.
 
 * Markdown tables in compact style (`| a | b |`, separator `| --- | --- |`,
   empty cells as a single space) so they pass markdownlint. Cell contents escaped:
-  `|` becomes `\|`, newlines become spaces, and very long cells are
-  truncated at 120 chars with `...`.
+  `|` becomes `\|`, newlines become spaces, markdown markup is escaped as
+  above, and very long cells are truncated at 120 chars (counted before
+  escaping) with `...`.
 * Numbers: ms with one decimal (`12.3`), counts with `,` thousands separators
   regardless of the system locale.
 * No more than one blank line in a row. Output ends with a single newline.

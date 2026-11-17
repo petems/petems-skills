@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { escapeCell, mdTable, fmtMs, fmtCount, shortUrl, joinBlocks, makeUtc, urlBasename } from '../scripts/lib/format.mjs';
+import { escapeCell, mdText, mdTable, fmtMs, fmtCount, shortUrl, joinBlocks, makeUtc, urlBasename } from '../scripts/lib/format.mjs';
 import { makeMatcher } from '../scripts/lib/match.mjs';
 import { parseWindowSpec, resolveWindow } from '../scripts/lib/window.mjs';
 import { UsageError, UserError } from '../scripts/lib/errors.mjs';
@@ -14,6 +14,14 @@ describe('markdown formatting', () => {
     assert.ok(long.endsWith('...'));
     assert.equal(mdTable(['a', 'b'], [['1|2', '3']]), '| a | b |\n| --- | --- |\n| 1\\|2 | 3 |');
     assert.equal(mdTable(['a', 'b'], [['', 'x']]), '| a | b |\n| --- | --- |\n| | x |', 'empty cell is a single space');
+  });
+
+  it('backslash-escapes link, image, HTML and code-span markup, after truncating', () => {
+    assert.equal(escapeCell('![x](https://h/p) <b> `c` a\\b'), '!\\[x\\](https://h/p) \\<b\\> \\`c\\` a\\\\b');
+    assert.equal(mdText('[a]|<x>'), '\\[a\\]|\\<x\\>', 'prose keeps pipes');
+    assert.equal(escapeCell('CpuProfiler::StartProfiling (anonymous) a.js:15:3'), 'CpuProfiler::StartProfiling (anonymous) a.js:15:3');
+    const long = escapeCell('['.repeat(200));
+    assert.equal(long, '\\['.repeat(117) + '...', 'truncated to 120 source chars, then escaped');
   });
 
   it('formats ms with one decimal and counts with commas regardless of locale', () => {

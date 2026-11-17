@@ -1,12 +1,13 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync, symlinkSync } from 'node:fs';
+import { readFileSync, symlinkSync, writeFileSync, linkSync, unlinkSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { parseArgs } from '../scripts/lib/args.mjs';
 import { analyze, render } from '../scripts/lib/analyze.mjs';
-import { UsageError } from '../scripts/lib/errors.mjs';
+import { UsageError, UserError } from '../scripts/lib/errors.mjs';
+import { writeOutputSafely } from '../scripts/lib/cli.mjs';
 import { SECTION_KEYS, DEFAULT_SECTION_KEYS } from '../scripts/lib/sections/index.mjs';
 import { richTrace, writeTemp } from './helpers/fixtures.mjs';
 
@@ -71,8 +72,33 @@ describe('CLI (child process)', () => {
     assert.match(r.stderr, /refusing to write the report over the input trace/);
     const link = file.replace(/in\.json$/, 'link.json');
     symlinkSync(file, link);
-    assert.equal(run(file, '--out', link).status, 1);
+    const viaLink = run(file, '--out', link);
+    assert.equal(viaLink.status, 1);
+    assert.match(viaLink.stderr, /refusing to write the report over the input trace/);
     assert.equal(readFileSync(file, 'utf8'), before, 'input untouched');
+  });
+
+  it('refuses a symlinked --out even when it points at another file', () => {
+    const file = writeTemp('in.json', richTrace().toJSON());
+    const other = file.replace(/in\.json$/, 'other.txt');
+    writeFileSync(other, 'keep me');
+    const link = file.replace(/in\.json$/, 'report.md');
+    symlinkSync(other, link);
+    const r = run(file, '--out', link);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /^simplify-chrome-trace: error: refusing to write the report through a symlink \(.*report\.md\); remove it or choose another path\n$/);
+    assert.equal(readFileSync(other, 'utf8'), 'keep me', 'link target untouched');
+  });
+
+  it('--out creates a new file, and fully replaces an existing regular file', () => {
+    const file = writeTemp('in.json', richTrace().toJSON());
+    const out = file.replace(/in\.json$/, 'new.md');
+    assert.equal(run(file, '--out', out).status, 0);
+    const expected = run(file).stdout;
+    assert.equal(readFileSync(out, 'utf8'), expected);
+    writeFileSync(out, 'x'.repeat(expected.length * 3));
+    assert.equal(run(file, '--out', out).status, 0);
+    assert.equal(readFileSync(out, 'utf8'), expected, 'old, longer content fully replaced');
   });
 
   it('--help and --list exit 0', () => {
@@ -192,5 +218,49 @@ describe('JSON output', () => {
     const doc = JSON.parse(render(analyze(b.events, { sections: ['summary', 'longtasks'], window: 'breadcrumb', metadata: b.metadata }), { format: 'json' }));
     assert.deepEqual([doc.meta.window.startMs, doc.meta.window.endMs], [0, 250]);
     assert.equal(doc.sections.summary.window.source, 'DevTools breadcrumb');
+  });
+});
+
+// The early check runs before analysis; these call the write-time check
+// directly, after swapping the output path, to stand in for a race.
+describe('writeOutputSafely', () => {
+  const setup = () => {
+    const input = writeTemp('in.json', 'TRACE');
+    const st = statSync(input);
+    return { input, id: { dev: st.dev, ino: st.ino }, out: input.replace(/in\.json$/, 'out.md') };
+  };
+  const refused = (re) => (e) => e instanceof UserError && re.test(e.message);
+
+  it('refuses when the output was swapped for a symlink to the input', () => {
+    const { input, id, out } = setup();
+    writeFileSync(out, 'old report'); // passed the early check as a regular file
+    unlinkSync(out);
+    symlinkSync(input, out);
+    assert.throws(() => writeOutputSafely(out, id, 'REPORT'), refused(/through a symlink/));
+    assert.equal(readFileSync(input, 'utf8'), 'TRACE', 'input intact');
+  });
+
+  it('refuses when the output was swapped for a hard link to the input', () => {
+    const { input, id, out } = setup();
+    linkSync(input, out);
+    assert.throws(() => writeOutputSafely(out, id, 'REPORT'), refused(/over the input trace/));
+    assert.equal(readFileSync(input, 'utf8'), 'TRACE', 'input intact');
+  });
+
+  it('refuses a symlink to another file, leaving it intact', () => {
+    const { id, out } = setup();
+    const other = out.replace(/out\.md$/, 'other.txt');
+    writeFileSync(other, 'keep me');
+    symlinkSync(other, out);
+    assert.throws(() => writeOutputSafely(out, id, 'REPORT'), refused(/through a symlink/));
+    assert.equal(readFileSync(other, 'utf8'), 'keep me');
+  });
+
+  it('writes a new file and fully replaces an existing one', () => {
+    const { id, out } = setup();
+    writeOutputSafely(out, id, 'first, longer report');
+    assert.equal(readFileSync(out, 'utf8'), 'first, longer report');
+    writeOutputSafely(out, id, 'short');
+    assert.equal(readFileSync(out, 'utf8'), 'short');
   });
 });

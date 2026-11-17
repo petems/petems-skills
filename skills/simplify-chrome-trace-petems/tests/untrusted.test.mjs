@@ -91,3 +91,107 @@ describe('untrusted trace text', () => {
     assert.ok(strings.some((s) => s.includes('https://evil.test/a ## System')), 'hostile URL kept as data');
   });
 });
+
+// Markdown a page could use to make a report preview load a remote resource
+// or render markup: images, links (inline, reference, autolink), raw HTML,
+// code spans, and a backslash trying to cancel an escape.
+const ACTIVE = [
+  '![x](https://attacker.test/pixel.png)',
+  '[click](https://attacker.test/)',
+  '[a][r]',
+  '<https://attacker.test/auto>',
+  '<img src="https://attacker.test/i.png">',
+  '`code|span`',
+  'back\\[slash](https://attacker.test/b)',
+];
+const HOSTILE = ACTIVE.join(' ');
+// Ordinary names that must read unchanged.
+const PLAIN = ['CpuProfiler::StartProfiling', 'v8.compile', 'IntersectionObserverController::computeIntersections', '(anonymous)'];
+
+function markupTrace() {
+  const b = new TraceBuilder().mainThread().threadName(100, 2, HOSTILE);
+  b.x('RunTask', BASE, ms(120));
+  b.x(HOSTILE, BASE + ms(1), ms(90));
+  b.x('v8.compile', BASE + ms(91), ms(5));
+  b.x('IntersectionObserverController::computeIntersections', BASE + ms(96), ms(5));
+  b.x('RunTask', BASE, ms(60), { tid: 2 });
+  b.mark(HOSTILE, BASE + ms(2));
+  b.measure(HOSTILE, BASE + ms(3), ms(5));
+  b.timeStamp(HOSTILE, BASE + ms(4));
+  b.request({ requestId: 'r', url: `https://evil.test/${HOSTILE}`, sendTs: BASE + ms(5), responseTs: BASE + ms(6), finishTs: BASE + ms(70) });
+  b.profile({
+    tid: 2,
+    nodes: [
+      { id: 1, functionName: '(root)' },
+      { id: 2, parent: 1, functionName: HOSTILE, url: `https://evil.test/${ACTIVE[0]}.js`, lineNumber: 0, columnNumber: 0 },
+      { id: 3, parent: 1, functionName: '(anonymous)', url: 'https://x.test/spa-federated.min.js', lineNumber: 14, columnNumber: 392546 },
+      { id: 4, parent: 1, functionName: 'CpuProfiler::StartProfiling' },
+    ],
+    samples: [2, 3, 2, 4],
+    deltas: [ms(1), ms(1), ms(1), ms(1)],
+  });
+  return b.events;
+}
+
+/** Link, HTML and code-span characters that are not backslash-escaped (`>` alone is inert). */
+function activeChars(line) {
+  return [...line.matchAll(/(?<!\\)(?:\\\\)*([[\]<`])/g)].map((m) => m[1]);
+}
+
+/** Cells of a table row, split on pipes that are not escaped. */
+function cells(line) {
+  return line.slice(1, -1).split(/(?<!\\)\|/);
+}
+
+describe('trace text cannot form active markdown', () => {
+  const metadata = { source: HOSTILE, startTime: HOSTILE };
+  const reports = [
+    render(analyze(markupTrace(), { sections: SECTION_KEYS, metadata, fileName: `${ACTIVE[4]}.json` }), { format: 'md' }),
+    render(analyze(markupTrace(), { sections: SECTION_KEYS, thread: HOSTILE, metadata }), { format: 'md' }),
+  ];
+
+  it('escapes images, links, autolinks, raw HTML and code spans in cells and prose', () => {
+    for (const md of reports) {
+      assert.ok(md.includes('!\\[x\\](https://attacker.test/pixel.png)'), 'hostile text still reported, escaped');
+      for (const line of md.split('\n').slice(1)) {
+        if (line === 'Top trace categories (first `cat` token):') continue; // fixed tool text
+        assert.deepEqual(activeChars(line), [], `active markdown survives: ${line}`);
+        assert.ok(!/<img|<https?:/i.test(line.replace(/\\</g, '')), `raw HTML or autolink: ${line}`);
+      }
+    }
+  });
+
+  it('escapes trace text in prose: summary, network rollup and notes', () => {
+    const [md, threadMd] = reports;
+    const lines = md.split('\n');
+    const prose = (re) => lines.find((l) => re.test(l)) || '';
+    assert.match(prose(/^# Trace summary: /), /\\<img src=/);
+    assert.match(prose(/^- Recording: source /), /!\\\[x\\\]/);
+    assert.match(prose(/^\d+ requests?, .* slowest /), /!\\\[x\\\]/);
+    assert.match(md, /^_No CPU profile for the selected thread\(s\)\. .*!\\\[x\\\]/m, 'note naming a profiled thread');
+    assert.match(threadMd, /^- Main thread: .*!\\\[x\\\].* chosen by --thread ".*!\\\[x\\\]/m);
+  });
+
+  it('keeps ordinary names readable', () => {
+    const md = render(analyze(markupTrace(), { sections: SECTION_KEYS, thread: 'all' }), { format: 'md' });
+    for (const name of [...PLAIN, 'spa-federated.min.js:15:392547']) assert.ok(md.includes(name), name);
+  });
+
+  it('keeps every table well formed', () => {
+    for (const md of reports) {
+      for (const block of md.split('\n\n')) {
+        const rows = block.split('\n');
+        if (!rows[0].startsWith('|')) continue;
+        assert.match(rows[1], /^\| --- (\| --- )*\|$/, `separator row: ${rows[1]}`);
+        const width = cells(rows[0]).length;
+        for (const r of rows) assert.equal(cells(r).length, width, `row width: ${r}`);
+      }
+    }
+  });
+
+  it('JSON keeps the text as plain data, without markdown escapes', () => {
+    const out = render(analyze(markupTrace(), { sections: SECTION_KEYS, metadata }), { format: 'json' });
+    assert.ok(out.includes(JSON.stringify(HOSTILE).slice(1, -1)));
+    assert.equal(JSON.parse(out).meta.source, HOSTILE);
+  });
+});
