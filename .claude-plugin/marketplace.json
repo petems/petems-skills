@@ -25,7 +25,7 @@
     {
       "name": "three-phone-bill-download-petems",
       "source": "./",
-      "description": "Download and verify a Three UK bill PDF via Chrome DevTools"
+      "description": "Download and verify a Three UK bill PDF via the bundled three-bill CLI (Patchright)"
     },
     {
       "name": "peloton-invoice-download-petems",

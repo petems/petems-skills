@@ -2,13 +2,16 @@
 
 **Last verified: 2026-07-27** against a personal account on `www.three.co.uk`.
 
-This file is the contract the skill depends on. When the skill breaks, regenerate this file by running the skill in DevTools, watching the network panel, and updating both this file and `SKILL.md` step 4/5 together.
+This file is the contract the `three-bill` CLI depends on. The checks that
+enforce it live in `three-bill/three_bill/contract.py` (pure, unit-tested) and
+the calls in `three-bill/three_bill/my3.py`. When the skill breaks, regenerate
+this file (see Update procedure) and change those modules with it.
 
 ## Identifiers
 
 | Name | Where it comes from | Notes |
 | --- | --- | --- |
-| `cuid` (customer ID) | `sessionStorage["persist:customerProfilePersistor"]`, `customerId` field | redux-persist double-encodes: parse the outer JSON, then parse the `customerId` value again. Only populated once `/account` has loaded. Equals the "Account Number" on the dashboard. |
+| `cuid` (customer ID) | The SPA's own seed request path while `/account` loads. Fallback: `customerId` in `sessionStorage["persist:customerProfilePersistor"]` | redux-persist double-encodes; parse twice. Empty on `/customer-logged`. Equals the dashboard "Account Number". |
 | `billId` (billing arrangement ID) | Seed response, `customer.financialAccount[0].id` | For personal accounts equals `cuid`. Do not hardcode that; read it from the seed response. |
 | `billNumber` | List response, `bills[i].data.billNumber` | Short 3-digit suffix (e.g. `116`). Per-account, monotonically increasing. The PDF prints it as `<cuid><billNumber>`. |
 
@@ -23,9 +26,35 @@ via the CORS `Access-Control-Expose-Headers` mechanism. The token also
 lives in the `WIRELESS_SECURITY_TOKEN` cookie, but that cookie is
 HttpOnly, so JS cannot read it directly.
 
-Pattern: each call returns a *new* `uxfauthorization` header. Save it to a `window.` global and use it on the next call. The first call is the seed call below, which requires no `Authorization` header.
+Pattern: each call returns a *new* `uxfauthorization` header. The CLI keeps it
+in a Python variable and sends it as `authorization` on the next call. The
+first call is the seed call below, which requires no `Authorization` header.
+The CLI makes its own seed call rather than reusing the token from the SPA's,
+because the SPA spends that token on its own next call.
 
-All fetches use `credentials: 'include'` so the HttpOnly session cookie flows automatically.
+Seed and list run as same-origin `fetch(..., {credentials: 'include'})` inside
+the page (`page.evaluate(js, arg)`), so the HttpOnly session cookies flow
+automatically. The PDF is fetched with Playwright's `context.request`, which
+shares the persistent context's cookies, with an in-page fetch as fallback.
+
+### Session check (no auth header required)
+
+```text
+GET https://www.three.co.uk/rp-server-b2c/authentication/v1/B2C/user
+    ?salesChannel=selfService
+```
+
+Body field read: `isAnonymous`. Only a literal `false` counts as signed in. A
+missing, `null`, string or numeric value fails closed. An Auth0 login can
+succeed while this stays `true` (the browser killed mid-flow).
+
+### Pages
+
+- `/customer-login`: sign-in entry; hands off to `auth.three.co.uk` (Auth0).
+- `/customer-logged`: post-login marketing landing page. Does **not** populate
+  customer state; the cuid reads as `"undefined"` there.
+- `/account`: the dashboard. Loading it fires the seed request and fills the
+  redux-persist store.
 
 ## Endpoints
 
@@ -139,26 +168,19 @@ Sanity-check values from this account only:
 - April 2026 bill: 1,192,590 bytes
 - March 2026 bill: 1,190,524 bytes
 
-## MCP tool constraints
-
-Not API behaviour, but these break the skill just as effectively:
-
-- `evaluate_script` `args` accepts **element uids from a snapshot only**.
-  Passing a `cuid` string fails with "No snapshot found for page". Inline
-  values as literals in the function body.
-- `evaluate_script` `filePath` is sandboxed to the configured workspace roots.
-  `/tmp` is rejected. Write inside the project directory.
-- `filePath` output is JSON-encoded and the extension is normalised to
-  `.json`. A returned base64 string arrives wrapped in `"` quotes; strip them
-  before `base64 -d`.
-
 ## Update procedure
 
-If the skill starts failing with `seed_failed`, `list_shape_changed`, or `pdf_content_type:...`:
+If the CLI starts failing with `seed_failed`, `seed_shape_changed`,
+`list_shape_changed`, or `pdf_content_type:...`:
 
 1. Open `https://www.three.co.uk/account` in a regular browser and log in.
 2. Open DevTools → Network → filter for `rp-server-b2c`.
 3. Click through the bills section and watch the requests.
 4. Compare the live URLs, headers, and body shapes against this file.
-5. Update both this file and the matching JavaScript in `SKILL.md` steps 3, 4, and 5.
-6. Re-run the skill end-to-end before committing.
+5. Update this file, `three-bill/three_bill/contract.py` and its tests in
+   `three-bill/tests/test_contract.py` together.
+6. Re-run `three-bill list` and `three-bill download --latest` end-to-end, and
+   the skill's PDF verification step, before committing.
+
+The redacted request log in `~/.three-bill/diagnostics/` from a failed run is a
+good starting point for step 4.
