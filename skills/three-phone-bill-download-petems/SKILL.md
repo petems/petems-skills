@@ -1,19 +1,12 @@
 ---
 name: three-phone-bill-download-petems
-description: Download and verify a Three UK bill PDF via Chrome DevTools, using the My3 JSON API directly (resilient to SPA UI changes)
+description: >-
+  Download and verify a Three UK mobile bill PDF using the bundled three-bill
+  CLI, which calls the My3 JSON API from a dedicated Patchright browser profile
+  (resilient to SPA UI changes). Use when the user wants to download, grab,
+  fetch or save a Three / Three UK phone bill or invoice as a PDF.
 license: MIT
 allowed-tools:
-  - mcp__chrome-devtools__navigate_page
-  - mcp__chrome-devtools__take_snapshot
-  - mcp__chrome-devtools__take_screenshot
-  - mcp__chrome-devtools__click
-  - mcp__chrome-devtools__press_key
-  - mcp__chrome-devtools__wait_for
-  - mcp__chrome-devtools__list_network_requests
-  - mcp__chrome-devtools__evaluate_script
-  - mcp__chrome-devtools__new_page
-  - mcp__chrome-devtools__list_pages
-  - mcp__chrome-devtools__select_page
   - Bash
   - Read
 ---
@@ -21,30 +14,39 @@ allowed-tools:
 # Download a Three UK bill PDF
 
 When the user asks to download a bill from Three.co.uk, follow these steps.
-This skill uses Chrome DevTools MCP to log in to My3, then calls the
-underlying `/rp-server-b2c/` JSON API directly to list and download bills.
-The previous version of this skill scraped the `/account/view-bill` page;
-that flow broke when Three redesigned the portal in early 2026. The API
-flow is much less brittle: Three's React SPA changes often, the JSON
-contract does not.
 
-See `references/three-api-endpoints.md` for a frozen snapshot of the endpoints, headers, and response shapes this skill depends on.
+The work is done by `three-bill`, a small Python CLI in this skill's
+`three-bill/` directory. It drives its own Patchright Chromium on a dedicated
+profile (`~/.three-bill/profile`), loads My3's `/account` page, and calls the
+`/rp-server-b2c/` JSON API directly: seed, list bills, then the PDF. All of the
+API shape checks (the `customer.financialAccount[0].id` billing arrangement,
+deriving the month from `billCloseDate`, the fail-closed `isAnonymous === false`
+check, the redux-persist double encoding, digit-only identifiers) live in
+`three-bill/three_bill/contract.py`.
+
+See `references/three-api-endpoints.md` for the endpoints, headers and response
+shapes the CLI depends on.
 
 ## Prerequisites
 
-- **Chrome DevTools MCP server** configured and running (`npx @anthropic-ai/chrome-devtools-mcp@latest`)
-- The MCP server registered in Claude Code settings under `mcpServers`
-- **poppler** installed for PDF verification (`brew install poppler` on macOS, `apt-get install poppler-utils` on Linux)
-- If MCP tools are unavailable, stop and ask the user to set up Chrome DevTools MCP first
-- **Stale browser lock**: If a tool call fails with "The browser is already running",
-  check for a stale lock file and orphaned Chrome process:
+- **three-bill on PATH.** Check with `command -v three-bill`. If it is
+  missing, ask the user to install it (it needs `uv`):
 
   ```bash
-  ls -la ~/.cache/chrome-devtools-mcp/chrome-profile/SingletonLock
-  readlink ~/.cache/chrome-devtools-mcp/chrome-profile/SingletonLock
-  # If the PID is an old MCP Chrome (not regular Chrome), kill it
-  kill <PID>
+  uv tool install --editable "<this skill's base directory>/three-bill"
   ```
+
+  ```bash
+  three-bill install-browser
+  ```
+
+  If the user would rather not install it, run every command below as
+  `uv run --project "<this skill's base directory>/three-bill" three-bill ...`
+  instead.
+- **A My3 session in the three-bill profile.** Created once by the user with
+  `three-bill login` (see step 2). It persists between runs.
+- **poppler** for PDF verification (`brew install poppler` on macOS,
+  `apt-get install poppler-utils` on Linux).
 
 ## Steps
 
@@ -63,409 +65,101 @@ them: "The current month's bill is not available yet. Three generates
 new bills after the 23rd. I will look for last month's bill instead."
 Then default to the previous month.
 
+A bill's month is the month it was **issued** (its `billCloseDate`, the 24th).
+"My July bill" is the one closing 24 July and covering up to 23 July.
+
 Confirm parameters with the user before proceeding.
 
-### 2. Navigate to Three.co.uk and handle login
+### 2. Download the bill
 
-1. Navigate to `https://www.three.co.uk/customer-login`. This redirects to the account dashboard if already logged in, or shows the login form (hosted on `auth.three.co.uk`) if not.
-2. Take a snapshot.
-3. **Cookie consent**: If "Accept all" / "Accept cookies" is visible, click it. For other overlays, press Escape.
-4. **Check login state**: If the snapshot shows "Good morning", "Dashboard", or "Account Number", or the URL is `/account`, the user is logged in. Proceed to Step 3.
-5. **If not logged in**:
-   - Tell the user: "Please log in to your Three account in the Chrome browser window. I will wait for you to complete login."
-   - Use `wait_for` with timeout 120000ms, looking for text such as `["Good morning", "Dashboard", "Account Number"]`.
-   - Once login is detected, take a fresh snapshot.
-6. Never enter credentials on behalf of the user.
-7. **Normalise the page origin.** After login the active tab can be left on
-   `auth.three.co.uk` rather than `www.three.co.uk`. Evaluate the current
-   URL; if the origin is not `https://www.three.co.uk`, navigate to
-   `https://www.three.co.uk/account` and take a fresh snapshot. Steps 3, 4,
-   and 5 use origin-relative `/rp-server-b2c/...` URLs and rely on the
-   `www.three.co.uk` session cookies.
-8. **Load the dashboard, not just the landing page.** Auth0 drops you on
-   `https://www.three.co.uk/customer-logged`, which is a marketing landing
-   page. It does *not* populate customer state: on that page the customer ID
-   reads back as the literal string `"undefined"` and the redux store holds
-   `customerId: ""`. Navigate to `https://www.three.co.uk/account` and wait
-   for `["Account Number", "Good morning", "Good afternoon", "Good evening"]`
-   before attempting step 3.
-9. **Confirm the session is not anonymous.** An Auth0 login can succeed while
-   the Three backend session stays anonymous (this happens if the browser was
-   killed mid-flow). Check it before spending calls:
-
-   Fail closed: only a literal `isAnonymous === false` counts as authenticated.
-   A 200 carrying a missing or non-boolean `isAnonymous` is treated as a
-   failure, not as permission to continue.
-
-   ```javascript
-   async () => {
-     const r = await fetch('/rp-server-b2c/authentication/v1/B2C/user?salesChannel=selfService', { credentials: 'include' });
-     if (r.status !== 200) return { error: 'auth_check_failed', status: r.status };
-     let b;
-     try { b = await r.json(); } catch (e) { return { error: 'auth_check_unparseable', message: String(e) }; }
-     if (b?.isAnonymous !== false) {
-       return { error: 'session_not_authenticated', isAnonymous: b?.isAnonymous ?? null, bodyKeys: Object.keys(b || {}) };
-     }
-     return { authenticated: true, userId: b?.userId };
-   }
-   ```
-
-   Proceed only on `authenticated: true`. On any error shape (including
-   `session_not_authenticated`, a 500, or an unparseable body) the My3 session
-   is broken even though the header shows "My3 account". Ask the user to log in
-   again and do not proceed. Symptom if you push on regardless:
-   `/account/view-bill` renders "Something went wrong. We can't load this page
-   right now." with an error code.
-
-### 3. Resolve the customer ID
-
-The customer ID (`cuid`) is needed for every API call. It comes from the
-SPA's redux store, persisted in `sessionStorage` under
-`persist:customerProfilePersistor`.
-
-Do **not** try the `_tms_persistUser` cookie. Earlier versions of this skill
-did; its value is the literal string `false` (a remember-me flag), not a JSON
-blob with a `cuid` field. `JSON.parse("false")` yields `false`, so the old
-extraction always failed with `no_cuid_in_cookie` and empty `keys`.
-
-`redux-persist` double-encodes: the outer value is JSON whose *values are
-themselves JSON strings*, so `customerId` parses out of `"\"949613941\""`.
-This only works once the dashboard has loaded (step 2.8).
-
-Run via `evaluate_script`:
-
-```javascript
-() => {
-  const raw = sessionStorage.getItem('persist:customerProfilePersistor');
-  if (!raw) return { error: 'persistor_missing' };
-  let outer;
-  try { outer = JSON.parse(raw); } catch (e) { return { error: 'persistor_parse_failed', message: String(e) }; }
-  // JSON.parse("null") returns null, and a bare string or array is equally
-  // possible if the store shape changes. Check before dereferencing, or the
-  // throw escapes as an opaque tool error instead of a contract error.
-  if (outer === null || typeof outer !== 'object' || Array.isArray(outer)) {
-    return { error: 'persistor_parse_failed', reason: 'not_an_object', type: outer === null ? 'null' : typeof outer };
-  }
-  let cuid = outer.customerId;
-  try { cuid = JSON.parse(cuid); } catch (e) { /* already a bare string */ }
-  cuid = String(cuid == null ? '' : cuid);
-  if (!/^\d{6,}$/.test(cuid)) {
-    return { error: 'no_cuid_in_store', value: cuid.slice(0, 40), outerKeys: Object.keys(outer).slice(0, 25) };
-  }
-  return { cuid };
-}
-```
-
-**Fallbacks**, in order, if that returns an error:
-
-1. Use `list_network_requests` (filter `resourceTypes: ["fetch","xhr"]`) to find
-   a `/rp-server-b2c/care/v1/B2C/customer/<id>?` request the SPA has already
-   made, and take `<id>` from the URL path.
-2. Read the "Account Number" shown on the `/account` dashboard. For personal
-   accounts this is the same value as the `cuid`. Cross-check it against the
-   `Your account number` field on the downloaded PDF in step 8.
-
-If the value is still `"undefined"` or empty, you are almost certainly on
-`/customer-logged` rather than `/account`. Go back to step 2.8.
-
-### 4. Call the API (seed + list bills)
-
-Run a single `evaluate_script` that calls the seed endpoint, then the list-bills endpoint. The seed endpoint returns a `uxfauthorization` token in its response header that must be passed as the `Authorization` header on subsequent calls. The token rotates on every call, so re-read it from each response.
-
-**`evaluate_script` cannot take arbitrary arguments.** Its `args` parameter
-accepts *element uids from a page snapshot only*, so passing `cuid` through it
-fails with "No snapshot found for page". Inline the value into the function
-body as a literal instead (substitute the real `cuid` before sending the call).
-
-Two shape notes, both learned the hard way:
-
-- The seed body is nested under a top-level `customer` key, and
-  `financialAccount` is an **array**, so the billing arrangement id lives at
-  `customer.financialAccount[0].id`. The old path
-  (`seedBody.financialAccount.id`) is always `undefined`.
-- `bills[i].month` is **not** a calendar month. It is a billing-period counter
-  and equals `bills[i].data.billPeriod`. Deriving the month from it mislabels
-  bills (the bill closing 24 Jul 2026 has `month: 5`, which a 0-indexed
-  reading calls "June"). Derive the calendar month and year from
-  `data.billCloseDate` instead.
-
-**Substitute by replacing the whole quoted token, quotes included, with the
-output of `JSON.stringify(value)`.** Do not paste a bare value between the
-existing quotes. Serialising produces a syntactically valid string literal for
-any input, so a malformed value cannot terminate the literal early and break
-parsing before the guards below get to run. The placeholder is written with
-double quotes as a reminder that the replacement is JSON.
-
-The snippet also guards against a forgotten substitution: without that check an
-unreplaced placeholder is sent to the API and comes back as a generic
-`seed_failed`, which reads like a Three-side outage rather than an operator
-error.
-
-```javascript
-async () => {
-  const cuid = "REPLACE_WITH_CUID";
-  if (/REPLACE_WITH_/.test(cuid)) return { error: 'placeholder_not_replaced', field: 'cuid' };
-  if (!/^\d{6,}$/.test(cuid)) return { error: 'invalid_identifier', field: 'cuid', value: String(cuid).slice(0, 40) };
-  const base = '/rp-server-b2c';
-  // 1. Seed: get auth token + billing arrangement id
-  const seedUrl = `${base}/care/v1/B2C/customer/${cuid}?salesChannel=selfService&initId=Digital&levelOfData=owningIndividual,financialAccount`;
-  const seedRes = await fetch(seedUrl, { credentials: 'include' });
-  if (seedRes.status !== 200) {
-    const snippet = (await seedRes.text()).slice(0, 200);
-    return { error: 'seed_failed', status: seedRes.status, snippet };
-  }
-  let token = seedRes.headers.get('uxfauthorization');
-  if (!token) return { error: 'no_auth_header' };
-  const seedBody = await seedRes.json();
-  const customer = seedBody?.customer ?? seedBody;
-  // Only the documented billing fields are acceptable. Do NOT fall back to
-  // `customer.id`: that is the cuid, and the fact that it equals the billing
-  // arrangement id on personal accounts does not prove it does so in general.
-  // If both documented fields are absent, fail with seed_shape_changed rather
-  // than constructing a request that may be misrouted.
-  const rawBillId = customer?.financialAccount?.[0]?.id ?? customer?.billingArrangement?.id;
-  if (rawBillId == null || (typeof rawBillId !== 'string' && typeof rawBillId !== 'number')) {
-    return { error: 'seed_shape_changed', field: 'billId', bodyKeys: Object.keys(seedBody || {}), customerKeys: Object.keys(customer || {}) };
-  }
-  const billId = String(rawBillId);
-  if (!/^\d{6,}$/.test(billId)) {
-    return { error: 'invalid_identifier', field: 'billId', value: billId.slice(0, 40) };
-  }
-
-  // 2. List bills
-  const listUrl = `${base}/ebill/v1/customer/${cuid}/billing-arrangement/${billId}/bill?salesChannel=selfService`;
-  const listRes = await fetch(listUrl, {
-    credentials: 'include',
-    headers: { authorization: token },
-  });
-  if (listRes.status !== 200) {
-    const snippet = (await listRes.text()).slice(0, 200);
-    return { error: 'list_failed', status: listRes.status, snippet };
-  }
-  token = listRes.headers.get('uxfauthorization') || token;
-  const listBody = await listRes.json();
-  if (!Array.isArray(listBody?.bills)) {
-    return { error: 'list_shape_changed', bodyKeys: Object.keys(listBody || {}) };
-  }
-
-  // Store rotating token on window so the next evaluate_script call can read it.
-  window.__threeAuth = token;
-  window.__threeBillId = billId;
-
-  // Normalise the bills list. Ignore `month`/`year` on the entry: `month` is a
-  // billing-period counter, not a calendar month. The calendar month a user
-  // means by "my July bill" is the month the bill was issued, i.e.
-  // `data.billCloseDate` (the period it covers ends the day before).
-  // Validate every entry: a missing billNumber or close date would later
-  // produce `/bill/undefined/pdf` and silently fail. Surface a contract error.
-  const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-  const bills = [];
-  for (let i = 0; i < listBody.bills.length; i++) {
-    const b = listBody.bills[i];
-    // Digits only. billNumber is interpolated into a URL path in step 5, so a
-    // value containing a quote or `/` would break out of the path segment.
-    if (typeof b?.data?.billNumber !== 'string' || !/^\d+$/.test(b.data.billNumber)) {
-      return { error: 'bill_entry_shape_changed', index: i, field: 'billNumber', value: String(b?.data?.billNumber).slice(0, 40), dataKeys: Object.keys(b?.data || {}) };
-    }
-    const closeMs = Date.parse(b?.data?.billCloseDate);
-    if (!Number.isFinite(closeMs)) {
-      return { error: 'bill_entry_shape_changed', index: i, field: 'billCloseDate', value: String(b?.data?.billCloseDate).slice(0, 40) };
-    }
-    const close = new Date(closeMs);
-    const year = close.getUTCFullYear();
-    if (year < 2000 || year > 2100) {
-      return { error: 'bill_entry_shape_changed', index: i, field: 'billCloseDate_year', value: year };
-    }
-    // billAmount is cosmetic: it names the file and is cross-checked against
-    // the PDF in step 8, and never reaches a URL. So a bad value must not abort
-    // the download. Normalise rather than fail: accept a finite number, coerce
-    // a numeric string, otherwise null so step 6 omits it from the filename as
-    // it already documents.
-    const rawAmount = b?.data?.billAmount;
-    const parsedAmount = (rawAmount === null || rawAmount === undefined || rawAmount === '')
-      ? NaN
-      : Number(rawAmount);
-    const billAmount = Number.isFinite(parsedAmount) ? parsedAmount : null;
-    bills.push({
-      month: months[close.getUTCMonth()],
-      monthIndex: close.getUTCMonth(),
-      year,
-      billNumber: b.data.billNumber,
-      billAmount,
-      billCloseDate: b.data.billCloseDate,
-      billStartDate: b.data.billStartDate,
-      billEndDate: b.data.billEndDate,
-      billPeriod: b.data.billPeriod,
-    });
-  }
-  bills.sort((x, y) => Date.parse(y.billCloseDate) - Date.parse(x.billCloseDate));
-  return { billId, bills };
-}
-```
-
-Map the user's requested month and year to a `billNumber`:
-
-- If the user asked for "latest", take `bills[0]` (the list is sorted newest-first by close date).
-- If the user asked for a named month/year, find the entry whose `month`/`year` match.
-- If no match, list the available `{month, year}` entries from the result and ask the user to pick one. Do not proceed.
-
-`billAmount` is a **number** (e.g. `33.08`), not a string. The normalisation
-above guarantees it is either a finite number or `null`, so format it with
-`toFixed(2)` for the filename in step 6 when it is non-null, and take the
-`null` branch of the filename rule when it is not. A `null` here means the API
-contract drifted: mention it to the user, since step 8 then has no amount to
-cross-check against the PDF.
-
-Sanity check before downloading: the chosen bill's `billEndDate` should be the
-23rd of the requested month and `billCloseDate` the 24th. If the month you
-matched has a period ending in a different month, re-read the mapping notes
-above before proceeding.
-
-### 5. Download the PDF
-
-The PDF endpoint requires the rotating `authorization` header. Re-read
-it from `window.__threeAuth` (it was just updated by the list call).
-Fetch the PDF, base64-encode the response body, and write the encoded
-string straight to a file using `evaluate_script`'s `filePath` parameter.
-Then have Bash decode it.
-
-Three constraints on `evaluate_script` here, all of which bite:
-
-1. **No arbitrary `args`** (as in step 4). Inline `cuid`, `billId`, and
-   `billNumber` as literals in the function body.
-2. **`filePath` is sandboxed to the workspace roots.** A path under `/tmp`
-   is rejected with "is not within any of the configured workspace roots".
-   Write to a dot-file inside the current project directory and delete it
-   after decoding.
-3. **Substitute values safely.** Replace each whole quoted token, quotes
-   included, with the output of `JSON.stringify(value)`, exactly as in step 4.
-   Never paste a bare value between the existing quotes: serialisation is what
-   guarantees the script still parses when the value is malformed, and the
-   digit-only guards below then reject it cleanly instead of the script dying
-   at parse time.
-4. **The written file is JSON, and the extension is normalised to `.json`.**
-   Asking for `.three_bill_b64.tmp` produces `.three_bill_b64.json`, and the
-   contents are the *JSON-quoted* string (wrapped in `"`), not raw base64.
-   Strip the quotes before decoding, and read back the `.json` path that the
-   tool reports rather than the one you requested.
-
-Call `evaluate_script` with `filePath: "<PROJECT_DIR>/.three_bill_b64.tmp"` and this function:
-
-```javascript
-async () => {
-  const cuid = "REPLACE_WITH_CUID";
-  const billId = "REPLACE_WITH_BILL_ID";
-  const billNumber = "REPLACE_WITH_BILL_NUMBER";
-  // Guard the substitution and the format before building a URL. All three are
-  // digit-only; anything else either means a missed replacement or a value that
-  // could escape its path segment.
-  for (const [field, value] of [['cuid', cuid], ['billId', billId], ['billNumber', billNumber]]) {
-    if (/REPLACE_WITH_/.test(value)) return `ERROR:placeholder_not_replaced:${field}`;
-    if (!/^\d+$/.test(value)) return `ERROR:invalid_identifier:${field}`;
-  }
-  const token = window.__threeAuth;
-  if (!token) return 'ERROR:no_token';
-  const url = `/rp-server-b2c/care/v1/customer/${cuid}/billing-arrangement/${billId}/bill/${billNumber}/pdf?salesChannel=selfService`;
-  const res = await fetch(url, {
-    credentials: 'include',
-    headers: { authorization: token },
-  });
-  if (res.status !== 200) {
-    return `ERROR:pdf_status:${res.status}`;
-  }
-  const ctype = res.headers.get('content-type') || '';
-  if (!ctype.startsWith('application/pdf')) {
-    return `ERROR:pdf_content_type:${ctype}`;
-  }
-  window.__threeAuth = res.headers.get('uxfauthorization') || token;
-  const buf = await res.arrayBuffer();
-  const bytes = new Uint8Array(buf);
-  // Base64 in chunks to avoid stack overflow on large strings.
-  let bin = '';
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-  }
-  return btoa(bin);
-}
-```
-
-If the returned content starts with `ERROR:`, go to step 7 (Diagnostic capture). Otherwise decode, stripping the JSON quoting:
+Run one of these via Bash. Each opens a browser window briefly, loads My3 and
+closes it again. Expect it to take 10 to 30 seconds.
 
 ```bash
-# `tr -d '"'` removes the JSON string quotes; base64 has no `"` in its alphabet,
-# so this is safe. `base64 -d` is GNU/coreutils; macOS BSD base64 historically
-# used -D. Try both.
-tr -d '"' < "<PROJECT_DIR>/.three_bill_b64.json" \
-  | { base64 -d 2>/dev/null || base64 -D; } > /tmp/three_bill_temp.pdf
-rm -f "<PROJECT_DIR>/.three_bill_b64.json"
-test -s /tmp/three_bill_temp.pdf
-# Sanity-check size: a Three bill is typically 0.5-2 MB. Fewer than 100 KB is suspicious.
-[ "$(stat -f%z /tmp/three_bill_temp.pdf 2>/dev/null || stat -c%s /tmp/three_bill_temp.pdf)" -ge 100000 ]
+three-bill download --latest --out "<SAVE_LOCATION>"
 ```
 
-### 6. Rename and move the file
+```bash
+three-bill download --month March --year 2026 --out "<SAVE_LOCATION>"
+```
 
-1. Build the filename once from step 4's metadata, then reuse it for every
-   command below. There are two variants, so binding it to a shell variable
-   keeps the `mv` and the check from drifting apart:
-   - With an amount: `Three_UK_Bill_March_2026_GBP45.99.pdf`
-   - If the amount could not be determined (`billAmount` is `null` from
-     step 4), omit it: `Three_UK_Bill_March_2026.pdf`
+On success it prints one JSON object on stdout:
 
-   ```bash
-   # Pick ONE, substituting the real month, year, and toFixed(2) amount.
-   filename="Three_UK_Bill_<Month>_<Year>_GBP<Amount>.pdf"   # billAmount was a number
-   # filename="Three_UK_Bill_<Month>_<Year>.pdf"             # billAmount was null
-   ```
+```json
+{
+  "path": "/Users/me/Desktop/Three_UK_Bill_July_2026_GBP33.08.pdf",
+  "bytes": 1196342,
+  "month": "July",
+  "year": 2026,
+  "billNumber": "116",
+  "billAmount": 33.08,
+  "billCloseDate": "2026-07-24T00:00:00Z",
+  "billEndDate": "2026-07-23T00:00:00Z",
+  "cuid": "949613941",
+  "warnings": []
+}
+```
 
-2. Move the file:
+Keep `billAmount`, `billCloseDate`, `billEndDate` and `cuid` for step 4.
+Mention any `warnings` to the user (for example a `null` `billAmount`, which
+means step 4 has no amount to cross-check).
 
-   ```bash
-   mkdir -p "<SAVE_LOCATION>"
-   mv /tmp/three_bill_temp.pdf "<SAVE_LOCATION>/$filename"
-   ```
+On failure it prints a JSON error on stderr and exits non-zero. Act on the exit
+code:
 
-3. Verify the file exists and is non-zero:
+- **3, not logged in.** The three-bill profile has no live My3 session. Ask the
+  user to sign in themselves, in their own terminal or with the `!` prefix in
+  Claude Code:
 
-   ```bash
-   test -s "<SAVE_LOCATION>/$filename"
-   ```
+  ```bash
+  ! three-bill login
+  ```
 
-### 7. Diagnostic capture on failure
+  A browser window opens; they sign in to My3 there and the command returns
+  once the session is confirmed. Never type, ask for, or handle the user's
+  credentials. Once they say it worked, re-run the same `download` command.
+- **4, profile busy.** Another `three-bill` run (or a leftover Chromium) holds
+  the profile. Tell the user, wait for it to finish, and retry. Do not delete
+  any lock file.
+- **6, bill not found.** `details.available` lists the `{month, year}` pairs
+  Three returned. Show them and ask the user to pick one. Do not guess.
+- **5, 7 or 9.** See step 3.
+- **8, browser shutdown unconfirmed.** The bill may well have been saved (stdout
+  will say so), but a Chromium may still be running on the profile. Ask the user
+  to check and quit it before the next run.
 
-If any contract assertion in step 4 or 5 returned an `error:` shape (or `ERROR:...` string), do this before bailing:
+To see what bills exist without downloading, `three-bill list` prints
+`{"bills": [{month, year, billNumber, billAmount, billCloseDate, billStartDate,
+billEndDate, billPeriod}, ...]}`, newest first. The same exit codes apply.
 
-1. Stamp a timestamp: `TS=$(date +%s)`.
-2. Take a screenshot to `/tmp/three-skill-diag-${TS}.png`.
-3. Use `list_network_requests` (filter `resourceTypes: ["fetch","xhr"]`),
-   redact sensitive fields, and dump the sanitised result to
-   `<PROJECT_DIR>/.three-skill-diag-${TS}.json` via `evaluate_script`'s
-   `filePath` (return the filtered list as JSON-stringified text). It must be
-   a workspace-root path, not `/tmp`: `filePath` is sandboxed (see step 5).
-   Redaction rules:
-   - Replace any `authorization`, `uxfauthorization`, `cookie`, and
-     `set-cookie` header values with the literal string `"<redacted>"`.
-   - Replace the numeric customer ID segment in any `/customer/<id>` URL
-     path with `<cuid>`.
-   - Drop request/response bodies (URLs + status codes + sanitised
-     headers are enough for triage, raw bodies often contain PII).
-4. Report both paths to the user along with the specific error code (e.g. `seed_failed`, `list_shape_changed`, `pdf_content_type:text/html`).
-5. Point the user at `references/three-api-endpoints.md`. That snapshot may be out of date and need to be regenerated against the live SPA.
+### 3. Diagnostics on failure
 
-### 8. Verify the PDF
+For exit codes 5 (API contract changed), 7 (the PDF response was not a bill)
+and 9 (unexpected status or network failure), the CLI has already saved a
+screenshot and a redacted request log under `~/.three-bill/diagnostics/`. Their
+paths are in the error's `details.diagnostics`. The log holds URL paths with
+the customer and billing ids replaced, status codes and redacted headers: no
+tokens, cookies or bodies.
+
+1. Report the error code (for example `seed_shape_changed`,
+   `pdf_content_type:text/html`) and both diagnostic paths to the user.
+2. Point the user at `references/three-api-endpoints.md`. The snapshot may be
+   out of date and need regenerating against the live SPA, with matching
+   changes in `three-bill/three_bill/contract.py`.
+
+### 4. Verify the PDF
 
 1. Use the Read tool to view the downloaded PDF (pages "1-3"). If the Read tool cannot render the PDF, fall back to `pdftotext <file> -` via Bash.
 2. Check:
    - **Month match**: The PDF shows `Bill date 24 <Mon> <YY>` and
      `Your bill period Up to 23 <Mon> <YY>` for the requested month. This is
-     the authoritative check that the `month` field was mapped correctly
-     (see step 4). Confirm it rather than trusting the API label.
-   - **Amount visible**: `Total charges after VAT` matches the `billAmount`
-     used in the filename. If `billAmount` was `null`, there is nothing to
-     compare against: read the total off the PDF, report it, and flag that the
-     API did not supply a usable amount.
-   - **Account match**: `Your account number` equals the `cuid` from step 3.
+     the authoritative check that the month was mapped correctly. Confirm it
+     rather than trusting the API.
+   - **Amount visible**: `Total charges after VAT` matches `billAmount` from
+     step 2. If `billAmount` was `null`, there is nothing to compare against:
+     read the total off the PDF, report it, and flag that the API did not
+     supply a usable amount.
+   - **Account match**: `Your account number` equals `cuid` from step 2.
    - **Valid bill indicators**: Hutchison 3G UK Ltd, a VAT reg. no., a due date.
 3. Report a summary:
    - File saved to: `<full path>`
@@ -475,24 +169,33 @@ If any contract assertion in step 4 or 5 returned an `error:` shape (or `ERROR:.
 
 If verification fails, warn the user with specifics but keep the file.
 
+## File naming
+
+The CLI names the file; do not rename it.
+
+- With an amount: `Three_UK_Bill_March_2026_GBP45.99.pdf`
+- If `billAmount` was not a usable number: `Three_UK_Bill_March_2026.pdf`
+
 ## Error handling
 
-| Scenario | Action |
-| -------- | ------ |
-| MCP Chrome won't start (stale lock) | Clean up `~/.cache/chrome-devtools-mcp/chrome-profile/SingletonLock` per Prerequisites |
-| Not logged in | Navigate to login page, ask user to log in, wait with 120s timeout |
-| Cookie banner blocking | Click accept/dismiss, continue |
-| `persistor_missing` / `no_cuid_in_store` / cuid reads as `"undefined"` | You are on `/customer-logged`, not `/account`. Load the dashboard (step 2.8), then retry; else use the step 3 fallbacks |
-| `session_not_authenticated` / `auth_check_failed` / `auth_check_unparseable` | Auth0 logged in but My3 did not, or the check response was malformed. Ask the user to log in again; do not proceed. Only `isAnonymous === false` counts as authenticated |
-| `placeholder_not_replaced:<field>` | A `REPLACE_WITH_*` literal was left in the snippet. Substitute the real value and re-run; this is an operator error, not an API failure |
-| `invalid_identifier:<field>` | An identifier is not digit-only. Do not build a URL from it. Re-resolve it from step 3 or 4 |
-| Killing MCP Chrome mid-login | Drops the My3 session while leaving Auth0 cookies. Re-login before retrying |
-| Seed endpoint 401/403 | Session expired mid-run; ask user to re-login, retry once |
-| Seed endpoint 404 or 5xx | "Three API may have moved". Run step 7 (diagnostic capture), point at `references/three-api-endpoints.md` |
-| `uxfauthorization` header missing | Same as above |
-| List response shape changed (`bills` not an array) | Surface `bodyKeys` from the assertion, run diagnostic capture |
-| Requested month not in list | List available months from the API result, ask user to pick one |
-| PDF content-type not `application/pdf` | Surface the actual content-type (often `text/html` for auth redirects); run diagnostic capture |
-| Downloaded file empty or under 100 KB | Warn user, suggest retrying; keep the artefact for inspection |
-| PDF verification mismatch (month/amount) | Warn user with specifics, keep the file |
-| Multiple accounts on the session | The cookie/network fallback may return more than one customer ID; ask the user which to use |
+| Exit | Error code(s) | Action |
+| ---- | ------------- | ------ |
+| n/a | `three-bill: command not found` | Install it (Prerequisites), or use the `uv run --project` form |
+| 3 | `no_profile` | First run. Ask the user to run `! three-bill login` |
+| 3 | `session_not_authenticated`, `auth_check_failed`, `auth_check_unparseable` | Auth0 may have logged in while My3 stayed anonymous, or the session expired. Only `isAnonymous === false` counts. Ask the user to run `! three-bill login` |
+| 3 | `redirected_to_sign_in`, `not_on_account_page`, `seed_unauthorized`, `list_unauthorized` | Session expired. Ask the user to run `! three-bill login`, then retry once |
+| 3 | `login_timeout` | (From `login`.) The user did not finish signing in. They can re-run it, with `--timeout 0` for no limit |
+| 4 | `profile_busy`, `profile_busy_stray_chromium` | Another run holds the profile. Wait and retry; never delete lock files |
+| 5 | `seed_shape_changed`, `no_auth_header` | Three changed the seed response. Report with diagnostics (step 3) |
+| 5 | `list_shape_changed`, `bill_entry_shape_changed` | Three changed the list response. `details` names the field. Report with diagnostics |
+| 5 | `persistor_missing`, `persistor_parse_failed`, `no_cuid_in_store` | The SPA's seed request was not seen and the redux-persist fallback failed. Retry once; if it persists, report with diagnostics |
+| 5 | `multiple_accounts` | The My3 login covers more than one account, which three-bill does not support yet. Tell the user; do not guess |
+| 5 | `invalid_identifier` | An id from Three was not digit-only, so no URL was built from it. Report with diagnostics |
+| 6 | `bill_not_found` | Show `details.available` and ask the user to pick a month |
+| 7 | `pdf_content_type:text/html`, `pdf_status:<n>` | Usually an auth redirect. Ask the user to re-login and retry once; otherwise report with diagnostics |
+| 7 | `pdf_not_pdf`, `pdf_too_small`, `pdf_too_large` | Not a plausible bill (expected 0.5 to 2 MB). Nothing was saved. Report with diagnostics |
+| 8 | `browser_shutdown_unconfirmed` | Chromium may still be running on `~/.three-bill/profile`. Ask the user to quit it before the next run |
+| 9 | `seed_failed`, `list_failed` | Three returned 404 or 5xx. The API may have moved. Report with diagnostics |
+| 9 | `navigation_failed`, `navigation_timeout`, `fetch_*` | Network problem reaching `www.three.co.uk`. Retry once, then report |
+| 9 | `browser_closed` | The browser window was closed mid-run. Retry and leave the window alone |
+| n/a | PDF verification mismatch (month/amount/account) | Warn user with specifics, keep the file |
