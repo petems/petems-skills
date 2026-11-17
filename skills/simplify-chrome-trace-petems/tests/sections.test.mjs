@@ -111,7 +111,7 @@ describe('timeline', () => {
 });
 
 describe('interactions', () => {
-  it('computes phases from EventTiming fields and groups by interactionId', () => {
+  it('computes phases across all events of an interaction and groups by interactionId', () => {
     const g = groupInteractions([
       { pid: 1, ts: 10, interactionId: 3, type: 'pointerdown', duration: 50, timeStamp: 100, processingStart: 105, processingEnd: 120 },
       { pid: 1, ts: 12, interactionId: 3, type: 'click', duration: 80, timeStamp: 100, processingStart: 130, processingEnd: 160 },
@@ -121,11 +121,25 @@ describe('interactions', () => {
     const a = g[0];
     assert.deepEqual(a.types, ['pointerdown', 'click']);
     assert.equal(a.durationMs, 80);
-    assert.equal(a.inputDelayMs, 30);
-    assert.equal(a.processingMs, 30);
-    assert.equal(a.presentationMs, 20);
+    assert.equal(a.inputDelayMs, 5, 'earliest processingStart - earliest timeStamp');
+    assert.equal(a.processingMs, 55, 'earliest processingStart to latest processingEnd');
+    assert.equal(a.presentationMs, 20, 'remainder of the duration');
     assert.equal(g[1].inputDelayMs, 0, 'negative input delay clamps to 0');
     assert.equal(g[1].presentationMs, 0);
+  });
+
+  it('attributes a slow click handler to processing even when pointerdown is longest', () => {
+    // Real Chrome shape: pointerdown has the longest duration but no handler,
+    // the click event carries the 395 ms handler.
+    const [g] = groupInteractions([
+      { pid: 1, ts: 1, interactionId: 9, type: 'pointerdown', duration: 399, timeStamp: 1000, processingStart: 1000.3, processingEnd: 1000.3 },
+      { pid: 1, ts: 2, interactionId: 9, type: 'pointerup', duration: 398, timeStamp: 1001, processingStart: 1001.2, processingEnd: 1001.2 },
+      { pid: 1, ts: 3, interactionId: 9, type: 'click', duration: 398, timeStamp: 1001, processingStart: 1001.3, processingEnd: 1396.3 },
+    ]);
+    assert.equal(g.durationMs, 399);
+    assert.ok(Math.abs(g.inputDelayMs - 0.3) < 1e-9);
+    assert.ok(Math.abs(g.processingMs - 396) < 1e-9);
+    assert.ok(Math.abs(g.inputDelayMs + g.processingMs + g.presentationMs - 399) < 1e-9, 'phases sum to duration');
   });
 
   it('INP: worst below 50 interactions, skip one per 50 above', () => {

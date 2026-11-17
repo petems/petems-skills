@@ -223,11 +223,17 @@ it. If none exist (typical for a non-navigation recording), print the note.
 * `EventTiming` async begin events (`ph: b`) with `args.data` carrying
   `interactionId > 0`. Group by `interactionId` (scoped by pid); the
   interaction's duration is the max `duration` of its events.
-* For each: offset (from the `b` event ts), `type`s involved, duration,
-  input delay (`processingStart - timeStamp`), processing
-  (`processingEnd - processingStart`), presentation delay
-  (`timeStamp + duration - processingEnd`), all in ms (these fields are
-  already ms). Clamp negatives to 0.
+* For each: offset (from the earliest `b` event ts), `type`s involved,
+  duration, and three phases computed across **all** events of the
+  interaction (as web-vitals attribution does), since a click is usually
+  pointerdown + pointerup + click and the slow handler may sit on a
+  different event from the one with the longest duration:
+  * input delay = earliest `processingStart` - earliest `timeStamp`
+  * processing = latest `processingEnd` - earliest `processingStart`
+  * presentation delay = duration - input delay - processing
+
+  All in ms (these fields are already ms). Clamp negatives to 0 and cap
+  each phase so the three sum to the duration.
 * INP estimate: the worst interaction if fewer than 50, otherwise the
   98th percentile (standard rule: ignore one highest per 50 interactions).
 * Rows sorted by duration descending, top N, filtered by `--match` on type.

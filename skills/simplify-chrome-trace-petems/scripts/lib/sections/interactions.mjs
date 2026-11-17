@@ -13,28 +13,56 @@ export function inpEstimate(durations) {
 
 const pos = (x) => (x > 0 ? x : 0);
 
-/** Group EventTiming records into interactions. Pure. */
+/**
+ * Group EventTiming records into interactions. Pure.
+ *
+ * Phases span every event in the interaction (as web-vitals attribution
+ * does), not just the longest one: a click is usually pointerdown +
+ * pointerup + click, and the slow handler may live on a different event
+ * from the one with the longest duration.
+ *   input delay  = earliest processingStart - earliest timeStamp
+ *   processing   = latest processingEnd - earliest processingStart
+ *   presentation = duration - input delay - processing
+ */
 export function groupInteractions(records) {
   const groups = new Map();
   for (const r of records) {
     const key = `${r.pid}|${r.interactionId}`;
     let g = groups.get(key);
-    if (!g) groups.set(key, (g = { pid: r.pid, interactionId: r.interactionId, ts: r.ts, types: [], worst: r }));
+    if (!g) {
+      groups.set(
+        key,
+        (g = {
+          pid: r.pid,
+          interactionId: r.interactionId,
+          ts: r.ts,
+          types: [],
+          duration: 0,
+          start: Infinity,
+          procStart: Infinity,
+          procEnd: -Infinity,
+        }),
+      );
+    }
     if (r.ts < g.ts) g.ts = r.ts;
     if (!g.types.includes(r.type)) g.types.push(r.type);
-    if (r.duration > g.worst.duration) g.worst = r;
+    if (r.duration > g.duration) g.duration = r.duration;
+    if (r.timeStamp < g.start) g.start = r.timeStamp;
+    if (r.processingStart < g.procStart) g.procStart = r.processingStart;
+    if (r.processingEnd > g.procEnd) g.procEnd = r.processingEnd;
   }
   return [...groups.values()].map((g) => {
-    const w = g.worst;
+    const inputDelayMs = Math.min(g.duration, pos(g.procStart - g.start));
+    const processingMs = Math.min(g.duration - inputDelayMs, pos(g.procEnd - g.procStart));
     return {
       pid: g.pid,
       interactionId: g.interactionId,
       ts: g.ts,
       types: g.types,
-      durationMs: w.duration,
-      inputDelayMs: pos(w.processingStart - w.timeStamp),
-      processingMs: pos(w.processingEnd - w.processingStart),
-      presentationMs: pos(w.timeStamp + w.duration - w.processingEnd),
+      durationMs: g.duration,
+      inputDelayMs,
+      processingMs,
+      presentationMs: pos(g.duration - inputDelayMs - processingMs),
     };
   });
 }
