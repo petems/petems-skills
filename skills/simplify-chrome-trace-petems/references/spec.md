@@ -85,8 +85,13 @@ would blend unrelated work and URLs into one page's report.
    candidate pids (never their URLs) and pointing at `--thread`. The root's
    frame tree (its iframes) is the page's frame set. Also honour later
    `FrameCommittedInBrowser` / `ProcessReadyInBrowser` events for the root
-   frame id that carry a `processId` (cross-process navigations).
-2. In those pids, the thread named `CrRendererMain`.
+   frame id that carry a `processId` (cross-process navigations), and those
+   with a `parent` in the frame tree (iframes added after tracing started).
+2. In those pids, the thread named `CrRendererMain`. Chrome can put several
+   tabs in one renderer process; if the trace lists other top-level frames
+   in the chosen root's process, warn that network and WebSocket records are
+   limited to the page's frames but thread data (tasks, events, CPU profile,
+   interactions, marks) cannot be split per tab and includes the other tab.
 3. Fallback with no frame info: the only `CrRendererMain`; if there are
    several, the busiest one, with a warning listing the pids.
 4. Fallback: `CrBrowserMain` (single-process Chrome).
@@ -354,28 +359,40 @@ with a `CrRendererMain` thread) gets its own record for an id; two tabs that
 reuse an id never merge. One request can still span processes (the browser
 may emit a navigation's send while the renderer emits its response).
 Browser and service processes carry every tab's traffic and often put a
-`frame` only on the send, so their events for an id are first split, in
-time order, into request instances: a framed event joins the open
+`frame` only on the send, so their events are grouped per process and id
+(ids are process-scoped, so two such processes reusing an id never merge),
+and each group is split, in time order, into request instances: a framed event joins the open
 (unfinished) instance with that frame, a second send in an open instance is
 a redirect, a send after `ResourceFinish` starts a new instance, and a
 frameless event joins the only open instance. A frameless event that could
 belong to several open instances is left in a separate unattributed
 instance instead of being guessed. Each instance then joins the renderer
 record for that id whose `frame` matches, else the only renderer record for
-that id when either side has no frame; a renderer record takes at most one
-instance. Every other instance is its own record, owned by the process of
-its first event, so two requests never share a URL, method or timing.
+that id when either side has no frame, but only when the match is unique:
+the instance matches one renderer record and no other instance (from any
+process) matches that record. Every other instance is its own record, owned
+by the process of its first event, so two requests never share a URL,
+method or timing.
 Captured: url, method, priority, offset, TTFB (response - send), duration
 (finish - send), encoded size (from finish `encodedDataLength`, else summed
 `ResourceReceivedData`), status, mimeType, `fromCache`/`fromServiceWorker`,
 `didFail`. Requests included when send ts is in window and url matches.
-Requests from the scope's renderer are kept; requests from a different
-renderer (another tab, an out-of-process iframe) are dropped. Browser and
-service processes can carry any tab's traffic, so their requests are kept
-only when their `frame` is one of the page's frames (the main frame ids from
-the trace plus frames seen on the page renderer's own requests); the rest
-are omitted with a one-line note pointing at `--thread all`, which keeps
-everything. The same rule applies to WebSocket events, with each
+Requests from a renderer other than the scope's (another tab, an
+out-of-process iframe) are dropped. Browser and service processes can carry
+any tab's traffic, so their requests are kept only when their `frame` is
+one of the page's frames; the rest are omitted with a note pointing at
+`--thread all`, which keeps everything. When the trace gives the page's
+frame tree and the scope is the page's renderer, the tree is the page's
+frame set, and since one renderer process can host several tabs, the
+scope's own requests are filtered by frame too: a framed request is kept
+only if its frame is in the tree. A frameless one cannot be attributed: it
+is kept unless the process is known to host other frames (another top-level
+frame listed in the trace, or a request from the process whose frame is
+outside the tree), then dropped, since keeping it could leak another tab.
+Requests dropped this way get their own omitted note. With no frame tree
+(CDP recordings often list no frames) the process is the only signal: the
+scope renderer's requests are all kept, and frames seen on them join the
+page's frame set. The same rules apply to WebSocket events, with each
 connection's frame shared across its events.
 Sorted by offset. Columns: `offset (ms)`, optional UTC, `ttfb (ms)`,
 `dur (ms)`, `size (KB)`, `status`, `method`, `url`. URLs drop the scheme and

@@ -25,7 +25,7 @@ export function compute(ctx) {
   const inWindow = ctx.model.network.filter((r) => r.sendTs !== null && ctx.inWin(r.sendTs));
   const page = pageRecordFilter(ctx, ctx.model.network);
   let reqs = inWindow.filter((r) => page.keep(r));
-  const omitted = omittedNote(page.omitted(), page.omitted() === 1 ? 'request' : 'requests');
+  const omitted = omittedNote(page, 'request', 'requests');
   if (ctx.matcher) reqs = reqs.filter((r) => ctx.matcher(r.url));
   reqs.sort((a, b) => a.sendTs - b.sendTs || byStr(String(a.requestId), String(b.requestId)));
   const rows = reqs.map((r) => ({ ...offsetFields(ctx, r.sendTs), ...requestRow(r) }));

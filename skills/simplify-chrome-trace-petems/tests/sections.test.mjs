@@ -387,6 +387,76 @@ describe('network', () => {
     ]);
   });
 
+  it('two tabs sharing one renderer process: keeps only the chosen tab and warns', () => {
+    const b = new TraceBuilder().mainThread().threadName(1, 1, 'CrBrowserMain');
+    b.tracingStarted([
+      { frame: 'TAB1', processId: 100, isOutermostMainFrame: true },
+      { frame: 'TAB2', processId: 100, isOutermostMainFrame: true },
+    ]);
+    b.x('RunTask', BASE, ms(1));
+    b.request({ requestId: 'a', url: 'https://tab1.test/', sendTs: BASE + ms(1), frame: 'TAB1' });
+    b.request({ requestId: 'b', url: 'https://tab2.test/secret', sendTs: BASE + ms(2), frame: 'TAB2' });
+    b.request({ requestId: 'c', url: 'https://tab2.test/frameless', sendTs: BASE + ms(3) });
+    b.request({ requestId: 'd', url: 'https://tab2.test/via-browser', sendTs: BASE + ms(4), pid: 1, frame: 'TAB2' });
+    b.instant('WebSocketCreate', BASE + ms(5), { args: { data: { identifier: 1, url: 'wss://tab1.test/feed', frame: 'TAB1' } } });
+    b.instant('WebSocketCreate', BASE + ms(6), { args: { data: { identifier: 2, url: 'wss://tab2.test/secret', frame: 'TAB2' } } });
+    const d = section(b.events, 'network');
+    assert.deepEqual(d.rows.map((r) => r.url), ['https://tab1.test/']);
+    assert.match(d.omitted, /^1 request from the browser.* 2 requests from the page's renderer process could not be tied to this page's frames/);
+    assert.deepEqual(section(b.events, 'websocket').connections.map((c) => c.url), ['wss://tab1.test/feed']);
+    const report = analyze(b.events, { sections: ['summary', 'network', 'websocket'] });
+    assert.ok(!render(report, { format: 'md' }).includes('tab2.test'), 'no URL from the other tab anywhere in the report');
+    assert.ok(report.warnings.some((w) => /1 other top-level frame \(another tab\) shares the analysed renderer process \(pid 100\).*thread data .* cannot be split per tab/.test(w)));
+    assert.equal(section(b.events, 'network', { thread: 'all' }).rows.length, 4);
+  });
+
+  it('with a known frame tree, keeps frameless and late-iframe requests unless the process hosts other frames', () => {
+    const b = new TraceBuilder().mainThread();
+    b.tracingStarted([{ frame: 'PAGE', processId: 100, isOutermostMainFrame: true }]);
+    b.x('RunTask', BASE, ms(1));
+    // An iframe committed after tracing started joins the page's frame tree.
+    b.instant('FrameCommittedInBrowser', BASE + ms(1), { pid: 1, args: { data: { frame: 'LATE', parent: 'PAGE', processId: 100 } } });
+    b.request({ requestId: 'a', url: 'https://page.test/', sendTs: BASE + ms(1), frame: 'PAGE' });
+    b.request({ requestId: 'b', url: 'https://page.test/iframe', sendTs: BASE + ms(2), frame: 'LATE' });
+    b.request({ requestId: 'c', url: 'https://page.test/frameless', sendTs: BASE + ms(3) });
+    const d = section(b.events, 'network');
+    assert.deepEqual(d.rows.map((r) => r.url), ['https://page.test/', 'https://page.test/iframe', 'https://page.test/frameless']);
+    assert.equal(d.omitted, '');
+    assert.deepEqual(analyze(b.events, { sections: ['network'] }).warnings.filter((w) => /top-level/.test(w)), []);
+    // A frame outside the tree in the same process (a tab opened after
+    // tracing started): its request and the frameless one are dropped.
+    b.request({ requestId: 'e', url: 'https://late-tab.test/', sendTs: BASE + ms(4), frame: 'UNKNOWN' });
+    const s = section(b.events, 'network');
+    assert.deepEqual(s.rows.map((r) => r.url), ['https://page.test/', 'https://page.test/iframe']);
+    assert.match(s.omitted, /^2 requests from the page's renderer process could not be tied/);
+  });
+
+  it('keeps one request id reused by two browser or service processes at once apart', () => {
+    const b = new TraceBuilder().threadName(1, 1, 'CrBrowserMain').threadName(2, 1, 'NetworkService');
+    b.x('RunTask', BASE, ms(1), { pid: 1 });
+    b.request({ requestId: 'dup', url: 'https://a.test/', sendTs: BASE + ms(1), responseTs: BASE + ms(11), finishTs: BASE + ms(31), finishBytes: 2048, pid: 1 });
+    b.request({ requestId: 'dup', url: 'https://b.test/', sendTs: BASE + ms(2), responseTs: BASE + ms(12), finishTs: BASE + ms(52), finishBytes: 4096, status: 404, method: 'POST', pid: 2 });
+    const all = section(b.events, 'network', { thread: 'all' });
+    assert.deepEqual(all.rows.map((r) => [r.url, r.method, r.ttfbMs, r.durMs, r.sizeKB, r.status]), [
+      ['https://a.test/', 'GET', 10, 30, 2, 200],
+      ['https://b.test/', 'POST', 10, 50, 4, 404],
+    ]);
+  });
+
+  it('never joins a renderer record that instances from two processes both match', () => {
+    const b = new TraceBuilder().mainThread().threadName(1, 1, 'CrBrowserMain').threadName(2, 1, 'NetworkService');
+    b.x('RunTask', BASE, ms(1));
+    b.instant('ResourceSendRequest', BASE + ms(1), { pid: 1, args: { data: { requestId: 'nav', url: 'https://page.test/one', requestMethod: 'GET', frame: 'PAGE' } } });
+    b.instant('ResourceSendRequest', BASE + ms(2), { pid: 2, args: { data: { requestId: 'nav', url: 'https://page.test/two', requestMethod: 'GET', frame: 'PAGE' } } });
+    b.instant('ResourceReceiveResponse', BASE + ms(21), { args: { data: { requestId: 'nav', frame: 'PAGE', statusCode: 200, mimeType: 'text/html' } } });
+    b.instant('ResourceFinish', BASE + ms(41), { args: { data: { requestId: 'nav', encodedDataLength: 2048 } } });
+    const all = section(b.events, 'network', { thread: 'all' });
+    assert.deepEqual(all.rows.map((r) => [r.url, r.ttfbMs, r.durMs, r.status]), [
+      ['https://page.test/one', null, null, null],
+      ['https://page.test/two', null, null, null],
+    ]);
+  });
+
   it('builds rollup, sizes, TTFB and truncates long URLs', () => {
     const long = 'https://cdn.example.com/' + 'a'.repeat(150) + '/end.js';
     const b = new TraceBuilder().mainThread();

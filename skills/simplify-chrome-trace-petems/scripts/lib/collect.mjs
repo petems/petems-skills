@@ -46,7 +46,7 @@ export class TraceCollector {
     this.strings = new Map();
     this.unmatchedE = 0;
     this.frames = []; // TracingStartedInBrowser frames
-    this.frameProcesses = []; // {frame, processId}
+    this.frameProcesses = []; // {frame, processId?, parent?}
     this.profiles = new Map(); // `${pid}|${id}` -> raw profile
     this.vitals = [];
     this.userTiming = [];
@@ -308,42 +308,47 @@ export class TraceCollector {
 
   /**
    * Assemble request records. Each renderer's events for a request id form
-   * their own record. Events from other processes (browser, network service)
-   * are first split into request instances (see nonRendererInstances), then
-   * each instance joins the renderer record for that id whose frame matches,
-   * else the only renderer record for that id when either side has no frame.
-   * A renderer record takes at most one instance; every other instance is a
-   * record of its own, so two requests' URL, method and timing never merge.
+   * their own record. Request ids are only unique per process, so events
+   * from other processes (browser, network service) are grouped per process
+   * and id, and each group is split into request instances (see
+   * nonRendererInstances). An instance joins the renderer record for that id
+   * whose frame matches, else the only renderer record for that id when
+   * either side has no frame, but only when the match is unique both ways:
+   * the instance matches one renderer record and no other instance (from any
+   * process) matches that record. Every other instance is a record of its
+   * own, so two requests' URL, method and timing never merge.
    */
   _buildNetwork(renderers) {
     const byId = new Map(); // requestId -> Map(renderer pid -> first frame)
-    const others = new Map(); // requestId -> non-renderer events
+    const others = new Map(); // [pid, requestId] -> non-renderer events
     for (const e of this.network) {
       if (renderers.has(e.pid)) {
         let m = byId.get(e.requestId);
         if (m === undefined) byId.set(e.requestId, (m = new Map()));
         if (!m.get(e.pid)) m.set(e.pid, e.frame);
       } else {
-        let list = others.get(e.requestId);
-        if (list === undefined) others.set(e.requestId, (list = []));
-        list.push(e);
+        const k = JSON.stringify([e.pid, e.requestId]);
+        let g = others.get(k);
+        if (g === undefined) others.set(k, (g = { pid: e.pid, id: e.requestId, events: [] }));
+        g.events.push(e);
       }
     }
+    const instancesById = new Map(); // requestId -> [{ inst, pid, n }]
+    for (const { pid, id, events } of others.values()) {
+      if (!instancesById.has(id)) instancesById.set(id, []);
+      const list = instancesById.get(id);
+      nonRendererInstances(events).forEach((inst, n) => list.push({ inst, pid, n }));
+    }
     const ownerOf = new Map(); // non-renderer event -> { key, pid }
-    for (const [id, events] of others) {
+    for (const [id, list] of instancesById) {
       const m = byId.get(id);
-      const claimed = new Set();
-      nonRendererInstances(events).forEach((inst, n) => {
-        let owner = { key: JSON.stringify(['own', inst.events[0].pid, id, n]), pid: inst.events[0].pid };
-        if (m && !inst.ambiguous) {
-          const free = [...m].filter(([p]) => !claimed.has(p));
-          let hit = inst.frame ? free.find(([, rf]) => rf === inst.frame) : undefined;
-          if (!hit && m.size === 1 && free.length === 1 && (!inst.frame || !free[0][1])) hit = free[0];
-          if (hit) {
-            claimed.add(hit[0]);
-            owner = { key: JSON.stringify(['renderer', hit[0], id]), pid: hit[0] };
-          }
-        }
+      const matches = list.map(({ inst }) => (m && !inst.ambiguous ? rendererMatches(m, inst) : []));
+      const claims = new Map(); // renderer pid -> matching instances
+      for (const ps of matches) for (const p of ps) claims.set(p, (claims.get(p) || 0) + 1);
+      list.forEach(({ inst, pid, n }, i) => {
+        let owner = { key: JSON.stringify(['own', pid, id, n]), pid };
+        const ps = matches[i];
+        if (ps.length === 1 && claims.get(ps[0]) === 1) owner = { key: JSON.stringify(['renderer', ps[0], id]), pid: ps[0] };
         for (const e of inst.events) ownerOf.set(e, owner);
       });
     }
@@ -429,10 +434,15 @@ export class TraceCollector {
     }
   }
 
+  // FrameCommittedInBrowser / ProcessReadyInBrowser: a frame's (new)
+  // process, and for a committed iframe its parent, so iframes added after
+  // tracing started still join the page's frame tree.
   _frameProcess(ev) {
     const d = ev.args && ev.args.data;
-    if (!d || d.frame === undefined || d.processId === undefined) return;
-    this.frameProcesses.push({ frame: d.frame, processId: d.processId });
+    if (!d || d.frame === undefined) return;
+    const parent = typeof d.parent === 'string' ? d.parent : undefined;
+    if (d.processId === undefined && parent === undefined) return;
+    this.frameProcesses.push({ frame: d.frame, processId: d.processId, parent });
   }
 
   _websocket(ev) {
@@ -558,6 +568,24 @@ export function nonRendererInstances(events) {
   }
   if (ambiguous) insts.push(ambiguous);
   return insts;
+}
+
+/**
+ * Renderer pids (for one request id) a non-renderer instance could belong
+ * to: those whose record has the instance's frame, else the only renderer
+ * record when either side has no frame.
+ * @param {Map<any,string>} m renderer pid -> frame
+ */
+function rendererMatches(m, inst) {
+  if (inst.frame) {
+    const hits = [...m].filter(([, rf]) => rf === inst.frame).map(([p]) => p);
+    if (hits.length) return hits;
+  }
+  if (m.size === 1) {
+    const [[p, rf]] = m;
+    if (!inst.frame || !rf) return [p];
+  }
+  return [];
 }
 
 /** Collect an in-memory array of events (tests, small inputs). */

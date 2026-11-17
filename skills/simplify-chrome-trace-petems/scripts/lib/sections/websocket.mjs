@@ -36,7 +36,7 @@ export function compute(ctx) {
   const all = ctx.model.websocket.map((e) => (e.frame ? e : { ...e, frame: frameOf.get(`${e.pid}|${e.identifier}`) || '' }));
   const page = pageRecordFilter(ctx, all);
   const evs = all.filter((e) => typeof e.ts === 'number' && ctx.inWin(e.ts) && page.keep(e)).sort((a, b) => a.ts - b.ts);
-  const omitted = omittedNote(page.omitted(), page.omitted() === 1 ? 'WebSocket event' : 'WebSocket events');
+  const omitted = omittedNote(page, 'WebSocket event', 'WebSocket events');
   let conns = groupSockets(evs);
   for (const c of conns) if (!c.url) c.url = urlOf.get(`${c.pid}|${c.identifier}`) || '';
   if (ctx.matcher) conns = conns.filter((c) => ctx.matcher(c.url));

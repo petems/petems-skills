@@ -21,14 +21,17 @@ export function threadShort(th) {
  * (the primary main frame if that settles it, else the first listed, which
  * is the inspected tab's root in DevTools traces and what Lighthouse uses),
  * and `ambiguous` records that a choice was made so the caller can warn.
+ * Chrome can put several tabs in one renderer process, so `sharedRoots`
+ * counts the other top-level frames listed in the chosen root's process(es).
  *
- * @returns {{frameIds:Set<string>, treeFrameIds:Set<string>, pids:Set<any>, ambiguous:null|{count:number, pids:any[]}}}
+ * @returns {{frameIds:Set<string>, treeFrameIds:Set<string>, pids:Set<any>, ambiguous:null|{count:number, pids:any[]}, sharedRoots:number}}
  */
 export function mainFrameInfo(model) {
   const frames = model.frames || [];
   let roots = frames.filter((f) => f.isOutermostMainFrame);
   if (roots.length === 0) roots = frames.filter((f) => f.isInPrimaryMainFrame);
   if (roots.length === 0) roots = frames.filter((f) => !f.parent);
+  const allRoots = roots;
   let ambiguous = null;
   if (roots.length > 1) {
     const primary = roots.filter((f) => f.isInPrimaryMainFrame);
@@ -45,9 +48,10 @@ export function mainFrameInfo(model) {
   if (root) {
     if (root.frame !== undefined) frameIds.add(root.frame);
     if (root.processId !== undefined) pids.add(root.processId);
-    // The root's iframes (any depth) belong to the same page.
+    // The root's iframes (any depth) belong to the same page, including
+    // iframes committed after tracing started.
     const byParent = new Map();
-    for (const f of frames) {
+    for (const f of [...frames, ...(model.frameProcesses || [])]) {
       if (!f.parent) continue;
       if (!byParent.has(f.parent)) byParent.set(f.parent, []);
       byParent.get(f.parent).push(f.frame);
@@ -64,7 +68,8 @@ export function mainFrameInfo(model) {
   for (const fp of model.frameProcesses || []) {
     if (frameIds.has(fp.frame) && fp.processId !== undefined) pids.add(fp.processId);
   }
-  return { frameIds, treeFrameIds, pids, ambiguous };
+  const sharedRoots = allRoots.filter((f) => f !== root && pids.has(f.processId)).length;
+  return { frameIds, treeFrameIds, pids, ambiguous, sharedRoots };
 }
 
 function withEventsFirst(list) {
@@ -82,13 +87,18 @@ const PICK_HINT = 'Use --thread pid:tid to choose another, or --thread all to co
 export function detectMainThreads(model) {
   const threads = model.threads;
   const warnings = [];
-  const { pids, ambiguous } = mainFrameInfo(model);
+  const { pids, ambiguous, sharedRoots } = mainFrameInfo(model);
   if (pids.size > 0) {
     const hit = threads.filter((t) => pids.has(t.pid) && t.name === 'CrRendererMain');
     if (hit.length > 0) {
       if (ambiguous) {
         warnings.push(
           `trace lists ${ambiguous.count} top-level frames (renderer pids ${ambiguous.pids.join(', ')}); analysed the first listed (pid ${[...pids].join(', ')}). ${PICK_HINT}`,
+        );
+      }
+      if (sharedRoots > 0) {
+        warnings.push(
+          `${sharedRoots} other top-level frame${sharedRoots === 1 ? '' : 's'} (another tab) share${sharedRoots === 1 ? 's' : ''} the analysed renderer process (pid ${[...pids].join(', ')}); network and WebSocket records are limited to this page's frames, but thread data (tasks, events, CPU profile, interactions, marks) cannot be split per tab and includes the other tab's work.`,
         );
       }
       return {
