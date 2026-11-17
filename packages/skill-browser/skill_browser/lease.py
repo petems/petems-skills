@@ -3,7 +3,7 @@
 Chromium does not refuse two processes on one ``user_data_dir``: both run, and
 the last to close overwrites the other's cookies. A live My3 session is lost
 with no error. This is the replacement for hand-cleaning chrome-devtools-mcp's
-``SingletonLock``: a second ``three-bill`` gets a clear "busy" error instead.
+``SingletonLock``: a second CLI run gets a clear "busy" error instead.
 
 The lock file is never unlinked. Unlinking splits contenders across inodes, and
 the process locking the old inode and the one locking the new path would both

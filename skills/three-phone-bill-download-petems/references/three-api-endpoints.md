@@ -1,6 +1,12 @@
 # Three UK My3 API (frozen snapshot)
 
-**Last verified: 2026-07-27** against a personal account on `www.three.co.uk`.
+**Last verified: 2026-11-17** by a live `three-bill login` and `download --latest`
+against a personal account on `www.three.co.uk`. Login state lives in the
+no-expiry `WIRELESS_SECURITY_TOKEN` and `USER_SESSION_STATUS` cookies, which the
+CLI carries across runs (`~/.three-bill/session-cookies.json`); the SPA rebuilds
+its sessionStorage from them. After Auth0, wait for the SPA to reach `/account`
+and write `persist:user` before navigating, or `/account` bounces to
+`/customer-login`.
 
 This file is the contract the `three-bill` CLI depends on. The checks that
 enforce it live in `three-bill/three_bill/contract.py` (pure, unit-tested) and

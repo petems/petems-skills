@@ -5,16 +5,18 @@ from __future__ import annotations
 import json
 
 import pytest
-
-from three_bill import contract
-from three_bill.contract import Bill
-from three_bill.errors import (
-    BillNotFoundError,
+from skill_browser.diagnostics import redact_headers
+from skill_browser.errors import (
     ContractChangedError,
     InvalidIdentifierError,
+    NotFoundError,
     NotLoggedInError,
     PdfInvalidError,
 )
+from skill_browser.months import parse_month
+
+from three_bill import contract
+from three_bill.contract import Bill
 from three_bill.my3 import Site, auth_barrier, is_account_url, validate_pdf
 
 
@@ -296,13 +298,13 @@ def test_bad_amount_does_not_fail_the_list():
     [("March", "March"), ("mar", "March"), ("3", "March"), ("SEPT", "September")],
 )
 def test_parse_month(arg, name):
-    assert contract.parse_month(arg) == name
+    assert parse_month(arg) == name
 
 
 @pytest.mark.parametrize("arg", ["13", "0", "ma", "Smarch", ""])
 def test_parse_month_rejects(arg):
     with pytest.raises(ValueError):
-        contract.parse_month(arg)
+        parse_month(arg)
 
 
 def _bills():
@@ -327,7 +329,7 @@ def test_select_month_year():
 
 
 def test_select_missing_lists_available():
-    with pytest.raises(BillNotFoundError) as info:
+    with pytest.raises(NotFoundError) as info:
         contract.select_bill(_bills(), "January", 2020)
     assert {"month": "June", "year": 2026} in info.value.details["available"]
 
@@ -389,7 +391,7 @@ def test_redact_headers():
         "x-session-id": "s",
         "content-type": "application/pdf",
     }
-    out = contract.redact_headers(headers)
+    out = redact_headers(headers)
     assert out["content-type"] == "application/pdf"
     assert {v for k, v in out.items() if k != "content-type"} == {"<redacted>"}
 

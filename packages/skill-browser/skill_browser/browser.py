@@ -21,21 +21,27 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
+import json
 import logging
 from pathlib import Path
 from typing import Any
 
-from three_bill.errors import (
+from skill_browser.errors import (
     ApiError,
     NotLoggedInError,
     ProfileBusyError,
     ShutdownUnconfirmedError,
 )
-from three_bill.lease import ProfileLease, chromium_owner_pid, secure_mkdir
+from skill_browser.files import write_private_atomic
+from skill_browser.lease import ProfileLease, chromium_owner_pid, secure_mkdir
 
 logger = logging.getLogger(__name__)
 
 CLEANUP_TIMEOUT_SECONDS = 10.0
+COOKIE_SAVE_TIMEOUT_SECONDS = 20.0
+QUIESCE_IDLE_TIMEOUT_MS = 8_000
+QUIESCE_BLANK_TIMEOUT_MS = 5_000
+SESSION_COOKIE_FILE = "session-cookies.json"
 DEFAULT_VIEWPORT = {"width": 1280, "height": 900}
 
 
@@ -71,11 +77,19 @@ class BrowserManager:
         headless: bool = False,
         executable_path: str | None = None,
         viewport: dict[str, int] | None = None,
+        locale: str = "en-GB",
+        keep_session_cookies: bool = False,
     ) -> None:
         self.user_data_dir = Path(user_data_dir).expanduser()
+        # Chromium drops cookies with no expiry when it exits, persistent
+        # profile or not. Sites whose login lives in such cookies (Keycloak's
+        # identity cookie, for one) would need a fresh login every run, so a
+        # tool can opt in to carrying them across runs in a 0600 file.
+        self.keep_session_cookies = keep_session_cookies
         self.headless = headless
         self.executable_path = executable_path
         self.viewport = viewport or DEFAULT_VIEWPORT
+        self.locale = locale
         self._playwright: Any = None
         self._context: Any = None
         self._page: Any = None
@@ -95,13 +109,16 @@ class BrowserManager:
             options: dict[str, Any] = {
                 "headless": self.headless,
                 "viewport": self.viewport,
-                "locale": "en-US",
+                "locale": self.locale,
+                "accept_downloads": True,
             }
             if self.executable_path:
                 options["executable_path"] = self.executable_path
             self._context = await self._playwright.chromium.launch_persistent_context(
                 str(self.user_data_dir), **options
             )
+            if self.keep_session_cookies:
+                await self._restore_session_cookies()
             pages = self._context.pages
             self._page = pages[0] if pages else await self._context.new_page()
             logger.info("Browser launched (headless=%s)", self.headless)
@@ -117,12 +134,79 @@ class BrowserManager:
                 raise ApiError(f"Failed to start the browser: {exc}") from exc
             raise
 
+    @property
+    def session_cookie_path(self) -> Path:
+        return self.user_data_dir.parent / SESSION_COOKIE_FILE
+
+    async def _restore_session_cookies(self) -> None:
+        path = self.session_cookie_path
+        try:
+            cookies = json.loads(path.read_text())
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError):
+            logger.warning("Ignoring unreadable %s", path.name)
+            return
+        if not isinstance(cookies, list):
+            return
+        valid = [
+            c
+            for c in cookies
+            if isinstance(c, dict)
+            and all(
+                isinstance(c.get(k), str) for k in ("name", "value", "domain", "path")
+            )
+        ]
+        if valid:
+            await self._context.add_cookies(valid)
+            logger.info("Restored %d session cookies", len(valid))
+
+    async def _quiesce(self, context: Any) -> None:
+        """Let in-flight requests land, then stop pages from starting new ones.
+
+        Sites that rotate a session token on every API call (Three's
+        WIRELESS_SECURITY_TOKEN) would otherwise have a background call rotate
+        it after the snapshot, leaving a dead token saved (seen live,
+        2026-11-17). Best effort: each step is bounded and may fail.
+        """
+        for page in list(context.pages):
+            try:
+                await page.wait_for_load_state(
+                    "networkidle", timeout=QUIESCE_IDLE_TIMEOUT_MS
+                )
+            except Exception:
+                pass
+            try:
+                await page.goto("about:blank", timeout=QUIESCE_BLANK_TIMEOUT_MS)
+            except Exception:
+                pass
+
+    async def _save_session_cookies(self, context: Any) -> None:
+        """Write the context's no-expiry cookies (names and values) to a 0600 file."""
+        await self._quiesce(context)
+        cookies = await context.cookies()
+        session = [c for c in cookies if c.get("expires", -1) in (-1, None)]
+        write_private_atomic(
+            self.session_cookie_path,
+            json.dumps(session).encode(),
+            overwrite=True,
+        )
+
     async def close(self) -> bool:
         """Close everything; return True only if shutdown was confirmed."""
         context, playwright = self._context, self._playwright
         self._context = self._page = self._playwright = None
         if context is None and playwright is None:
             return not self._stranded
+
+        if context is not None and self.keep_session_cookies:
+            try:
+                await asyncio.wait_for(
+                    self._save_session_cookies(context),
+                    timeout=COOKIE_SAVE_TIMEOUT_SECONDS,
+                )
+            except Exception as exc:  # never blocks shutdown
+                logger.warning("Could not save session cookies: %s", type(exc).__name__)
 
         confirmed = True
         for label, awaitable in (
@@ -145,6 +229,13 @@ class BrowserManager:
         return confirmed
 
     @property
+    def playwright(self) -> Any:
+        """The running Patchright driver, e.g. to launch a throwaway headless browser."""
+        if self._playwright is None:
+            raise RuntimeError("Browser not started")
+        return self._playwright
+
+    @property
     def context(self) -> Any:
         if self._context is None:
             raise RuntimeError("Browser not started")
@@ -157,7 +248,7 @@ class BrowserManager:
             raise RuntimeError("Browser not started")
         if self._page.is_closed():
             raise ApiError(
-                "The browser window was closed while three-bill was using it.",
+                "The browser window was closed mid-run.",
                 code="browser_closed",
             )
         return self._page
@@ -174,10 +265,12 @@ BrowserFactory = Callable[..., BrowserManager]
 async def open_profile(
     profile_dir: Path,
     *,
+    tool: str,
     headless: bool,
     executable_path: str | None = None,
     require_existing: bool = True,
     factory: BrowserFactory = BrowserManager,
+    **browser_options: Any,
 ) -> AsyncIterator[BrowserManager]:
     """Hold the profile lease for the browser's whole life.
 
@@ -188,14 +281,14 @@ async def open_profile(
     profile_dir = Path(profile_dir).expanduser()
     if require_existing and not profile_has_data(profile_dir):
         raise NotLoggedInError(
-            f"No Three session profile at {profile_dir}. Run `three-bill login`.",
+            f"No session profile at {profile_dir}. Run `{tool} login`.",
             code="no_profile",
         )
 
     lease = ProfileLease.for_profile(profile_dir)
     if not lease.try_acquire():
         raise ProfileBusyError(
-            f"Another three-bill process is using {profile_dir}. "
+            f"Another {tool} process is using {profile_dir}. "
             "Wait for it to finish (or close its browser window) and retry.",
             lock=str(lease.path),
         )
@@ -209,7 +302,12 @@ async def open_profile(
             pid=owner,
         )
 
-    browser = factory(profile_dir, headless=headless, executable_path=executable_path)
+    browser = factory(
+        profile_dir,
+        headless=headless,
+        executable_path=executable_path,
+        **browser_options,
+    )
     failure: BaseException | None = None
     try:
         await browser.start()
