@@ -1,7 +1,7 @@
 // network: request waterfall.
 
 import { fmtMs, fmtCount, mdTable, round3, shortUrl, byStr } from '../format.mjs';
-import { emptyBlock, heading, offsetFields, offsetHeaders, offsetCells, topN, moreLine } from './common.mjs';
+import { emptyBlock, heading, offsetFields, offsetHeaders, offsetCells, topN, moreLine, otherRendererFilter } from './common.mjs';
 
 /** Shape one collected request into a row (µs in, ms out). */
 export function requestRow(r) {
@@ -22,7 +22,8 @@ export function requestRow(r) {
 }
 
 export function compute(ctx) {
-  let reqs = ctx.model.network.filter((r) => r.sendTs !== null && ctx.inWin(r.sendTs));
+  const otherRenderer = otherRendererFilter(ctx);
+  let reqs = ctx.model.network.filter((r) => r.sendTs !== null && ctx.inWin(r.sendTs) && !otherRenderer(r.pid));
   if (ctx.matcher) reqs = reqs.filter((r) => ctx.matcher(r.url));
   reqs.sort((a, b) => a.sendTs - b.sendTs || byStr(String(a.requestId), String(b.requestId)));
   const rows = reqs.map((r) => ({ ...offsetFields(ctx, r.sendTs), ...requestRow(r) }));

@@ -3,7 +3,8 @@
 import { fmtMs, fmtCount, mdTable, round3, byStr } from '../format.mjs';
 import { emptyBlock, heading, offsetFields, offsetHeaders, offsetCells, topN, moreLine } from './common.mjs';
 
-// Navigation-timing marks Chrome also emits under blink.user_timing.
+// Navigation-timing marks Chrome also emits under blink.user_timing. These
+// are native instant marks; a user measure with one of these names is kept.
 const NAV_TIMING = new Set([
   'navigationStart', 'fetchStart', 'redirectStart', 'redirectEnd', 'unloadEventStart', 'unloadEventEnd',
   'domainLookupStart', 'domainLookupEnd', 'connectStart', 'connectEnd', 'secureConnectionStart',
@@ -18,7 +19,6 @@ export function userTimingEntries(records) {
   const open = new Map();
   const sorted = records.slice().sort((a, b) => a.ts - b.ts);
   for (const r of sorted) {
-    if (NAV_TIMING.has(r.name)) continue;
     switch (r.ph) {
       case 'b': {
         const key = `${r.pid}|${r.cat}|${r.name}|${r.id}`;
@@ -43,6 +43,7 @@ export function userTimingEntries(records) {
       case 'i':
       case 'R':
       case 'n':
+        if (NAV_TIMING.has(r.name)) break;
         out.push({ kind: 'mark', name: r.name, ts: r.ts, dur: null });
         break;
       default:

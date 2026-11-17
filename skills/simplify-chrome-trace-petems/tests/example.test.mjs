@@ -11,7 +11,7 @@ const tracePath = fileURLToPath(new URL('../examples/demo-trace.json.gz', import
 describe('examples/demo-trace.json.gz', () => {
   it('only references the local demo origin', () => {
     const text = gunzipSync(readFileSync(tracePath)).toString('utf8');
-    const urls = new Set(text.match(/\b(?:https?|wss?|chrome-extension):\/\/[^\s"'\\)]+/g) || []);
+    const urls = new Set(text.match(/\b(?:https?|wss?|file|chrome-extension):\/\/[^\s"'\\)]+/g) || []);
     const foreign = [...urls].filter((u) => !/^http:\/\/127\.0\.0\.1:8080(\/|$)/.test(u));
     assert.deepEqual(foreign, []);
     assert.ok(!/\/Users\/|\/home\//.test(text), 'no local filesystem paths');

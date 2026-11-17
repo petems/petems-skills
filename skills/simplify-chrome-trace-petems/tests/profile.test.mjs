@@ -74,12 +74,39 @@ describe('CPU profile', () => {
     assert.equal(a.self.get(outer), undefined);
   });
 
-  it('filters per sample using each sample timestamp', () => {
+  it('counts only the part of each sample inside a half-open range', () => {
+    // samples at 0, 1000, 2000, 3000 (relative), each lasting 1000 us
     const { p } = prof({ samples: [5, 5, 5, 5], deltas: [0, 1000, 1000, 1000], chunks: 1 });
     const th = [...p.threads.values()][0];
-    const a = aggregateSamples(p, th, BASE + 1000, BASE + 2000);
-    assert.equal(a.count, 2);
-    assert.equal(a.sampled, 2000);
+    const t0 = th.times[0];
+    const exact = aggregateSamples(p, th, t0 + 1000, t0 + 2000);
+    assert.equal(exact.count, 1, 'the sample starting at the end belongs to the next range');
+    assert.equal(exact.sampled, 1000);
+    const partial = aggregateSamples(p, th, t0 + 1500, t0 + 2500);
+    assert.equal(partial.count, 2);
+    assert.equal(partial.sampled, 1000, 'never more than the range');
+  });
+
+  it('adjacent ranges never share a sample', () => {
+    const { p } = prof({ samples: [5, 7, 5, 7], deltas: [0, 1000, 1000, 1000] });
+    const th = [...p.threads.values()][0];
+    const t0 = th.times[0];
+    const first = aggregateSamples(p, th, t0, t0 + 2000);
+    const second = aggregateSamples(p, th, t0 + 2000, t0 + 4000);
+    assert.equal(first.sampled + second.sampled, aggregateSamples(p, th, t0, t0 + 4000).sampled);
+  });
+
+  it('does not hand the gap between two profiles on one thread to a sample', () => {
+    const b = new TraceBuilder().mainThread();
+    b.x('RunTask', BASE, 10_000_000);
+    b.profile({ nodes: NODES, samples: [5, 5], deltas: [0, 1000] });
+    b.profile({ id: '0x9', startTime: BASE + 5_000_000, nodes: NODES, samples: [5, 5], deltas: [0, 1000] });
+    const m = collectEvents(b.events);
+    const p = buildProfiles(m.profiles);
+    const th = [...p.threads.values()][0];
+    assert.equal(th.times.length, 4);
+    const a = aggregateSamples(p, th, -Infinity, Infinity);
+    assert.equal(a.sampled, 4000, 'two 2-sample profiles at 1 ms intervals');
   });
 
   it('reports idle, program and GC separately and excludes synthetic frames', () => {
@@ -109,11 +136,15 @@ describe('CPU profile', () => {
     assert.equal(rows[0].selfMs, 2);
     assert.equal(rows[0].location, 'a.test/app.js:10:2');
     assert.equal(rows[0].selfPct, 50); // of 4 ms non-idle
+    // [0, 1.5 ms): all of the first sample and half of the second
     const w = analyze(b.events, { sections: ['functions'], window: '0-1.5' });
-    assert.equal(w.sections[0].data.rows[0].selfMs, 2);
+    assert.equal(w.sections[0].data.rows[0].selfMs, 1.5);
     assert.equal(w.sections[0].data.rows.length, 3);
+    // [1.5, 2.5 ms): half of the second (anonymous) and half of the third (inner)
     const w2 = analyze(b.events, { sections: ['functions'], window: '1.5-2.5' });
-    assert.deepEqual(w2.sections[0].data.rows.map((x) => [x.function, x.selfMs]), [['inner', 1], ['outer', 0]]);
+    const got = Object.fromEntries(w2.sections[0].data.rows.map((x) => [x.function, x.selfMs]));
+    assert.equal(got['(anonymous)'], 0.5);
+    assert.equal(got.inner, 0.5);
   });
 
   it('functions section adds a thread column when several threads contribute', () => {

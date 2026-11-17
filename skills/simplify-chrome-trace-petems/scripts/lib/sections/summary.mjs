@@ -5,33 +5,41 @@ import { overlap } from '../nesting.mjs';
 import { aggregateSamples } from '../profile.mjs';
 import { threadLabel, threadShort } from '../threads.mjs';
 import { ms } from './common.mjs';
+import { busyIntervals } from './timeline.mjs';
 
 export const TBT_THRESHOLD_US = 50000;
 
-/** Task stats over scope threads (tasks overlapping the window). */
+/**
+ * Task stats over scope threads (tasks overlapping the window).
+ *
+ * Busy time is the union of task intervals across scope threads (minus
+ * profiler artifacts) clipped to the window, so it can never exceed the
+ * window even with several threads in scope.
+ *
+ * TBT follows Lighthouse: a task's blocking portion is everything after its
+ * first 50 ms, and only the part of that inside the window counts. A long
+ * task that barely overlaps the window adds only what overlaps.
+ */
 export function taskStats(ctx) {
   let count = 0;
-  let busyUs = 0;
   let over50 = 0;
   let tbtUs = 0;
   const { start, end } = ctx.win;
   for (const th of ctx.scope.threads) {
-    const nest = ctx.nests.get(th.key);
     for (const t of ctx.tasks.get(th.key)) {
       if (t.artifact) continue;
       const inside = t.dur > 0 ? overlap(t.ts, t.end, start, end) > 0 : t.ts >= start && t.ts <= end;
       if (!inside) continue;
       count++;
-      let b = overlap(t.ts, t.end, start, end);
-      const arts = nest.artifactIntervals.get(t.index);
-      if (arts) for (const [s, e] of arts) b -= overlap(s, e, start, end);
-      busyUs += Math.max(0, b);
       if (t.effDur > TBT_THRESHOLD_US) {
         over50++;
-        tbtUs += t.effDur - TBT_THRESHOLD_US;
+        // Blocking portion: the last (effDur - 50 ms) of the task.
+        tbtUs += overlap(t.end - (t.effDur - TBT_THRESHOLD_US), t.end, start, end);
       }
     }
   }
+  let busyUs = 0;
+  for (const [s, e] of busyIntervals(ctx)) busyUs += overlap(s, e, start, end);
   return { count, busyMs: ms(busyUs), over50, tbtMs: ms(tbtUs) };
 }
 

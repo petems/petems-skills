@@ -35,6 +35,9 @@ export async function main(argv, io = {}) {
   }
   const started = Date.now();
   try {
+    if (parsed.out && sameFile(parsed.out, parsed.file)) {
+      throw new UserError(`refusing to write the report over the input trace (${parsed.out})`);
+    }
     const report = await analyzeFile(parsed.file, parsed.options);
     const text = render(report, { format: parsed.options.format || 'md' });
     if (parsed.out) {
@@ -61,5 +64,16 @@ export async function main(argv, io = {}) {
       return 1;
     }
     throw err;
+  }
+}
+
+/** True when both paths name the same existing file (symlinks and hard links included). */
+function sameFile(a, b) {
+  try {
+    const x = statSync(a);
+    const y = statSync(b);
+    return x.dev === y.dev && x.ino === y.ino;
+  } catch {
+    return false; // either does not exist yet, so they cannot be the same file
   }
 }

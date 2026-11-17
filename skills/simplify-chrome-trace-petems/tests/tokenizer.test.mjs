@@ -74,6 +74,42 @@ describe('streaming tokenizer', () => {
     assert.throws(() => collect('[{"a":1},{"b":}]', 4), (e) => e instanceof UserError && /not valid JSON/.test(e.message));
   });
 
+  it('rejects malformed top-level structure at any chunk size', () => {
+    const bad = [
+      ['[{"name":"A","ts":1}{"name":"B","ts":2}]', /expected "," or "\]"/],
+      ['[{"ph":"X"},]', /trailing comma in traceEvents/],
+      ['[,{"ph":"X"}]', /unexpected ","/],
+      ['{"traceEvents":[],}', /trailing comma in top-level object/],
+      ['{"traceEvents":[] "metadata":{}}', /expected "," or "}"/],
+      ['[{"ph":"X"}]garbage', /unexpected data after the end/],
+      ['{"traceEvents":[]}{}', /unexpected data after the end/],
+    ];
+    for (const [text, re] of bad) {
+      for (const size of [1, 3, 1 << 20]) {
+        assert.throws(() => tokenizeString(text, () => {}, size), (e) => e instanceof UserError && re.test(e.message), `${text} @${size}`);
+      }
+    }
+  });
+
+  it('allows trailing whitespace after the end', () => {
+    const r = tokenizeString('{"traceEvents":[{"ph":"X"}]}\n\n  ', () => {}, 2);
+    assert.equal(r.eventCount, 1);
+    assert.equal(r.truncated, false);
+  });
+
+  it('handles a multi-MB value split into many small chunks in linear time', () => {
+    const big = 'x'.repeat(12 * 1024 * 1024);
+    const text = `{"metadata":{"sourceMaps":"${big}"},"traceEvents":[{"ph":"X","name":"a"}]}`;
+    const started = Date.now();
+    let events = 0;
+    const r = tokenizeString(text, () => events++, 1024);
+    const elapsed = Date.now() - started;
+    assert.equal(events, 1);
+    assert.equal(r.metadata.sourceMaps.length, big.length);
+    // Re-copying the carried prefix per chunk takes ~12 s here; linear is ~0.1 s.
+    assert.ok(elapsed < 2000, `took ${elapsed} ms`);
+  });
+
   it('can be pushed incrementally by hand', () => {
     const out = [];
     const tok = new TraceTokenizer((e) => out.push(e));

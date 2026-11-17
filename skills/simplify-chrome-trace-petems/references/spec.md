@@ -37,7 +37,13 @@ The tool is read-only. It never modifies the trace.
 * Parsing is streaming: read the file in chunks, split out each top-level
   element of `traceEvents` and `JSON.parse` it on its own. The tokenizer must
   respect strings and escapes (braces inside string values, `\"`, `\\`), and
-  be correct no matter where chunk boundaries fall.
+  be correct no matter where chunk boundaries fall. Each chunk is scanned
+  once; a value spanning chunks is kept as pieces and joined when complete,
+  so a huge value (DevTools can store multi-MB source maps in `metadata`)
+  costs linear time.
+* The top-level structure is validated strictly: commas between elements,
+  no trailing commas, and nothing but whitespace after the end. A missing
+  closing `]` (truncation) is the only tolerated defect.
 * Events are handed to collectors as they stream in. Collectors keep compact
   records only (not whole raw events with big `args` blobs) where practical.
 * Clear, single-line errors (exit code 1) for: file not found, not JSON, no
@@ -106,8 +112,11 @@ Semantics:
 * Long tasks overlapping the window are listed with their full duration and
   marked `(clipped)` when they extend beyond it.
 * Instant and async events are included by their start `ts`.
-* CPU profile samples are filtered **per sample** using each sample's own
-  timestamp (not per chunk).
+* CPU profile samples are clipped **per sample**: each sample covers
+  `[t, t + dur)` and only its overlap with the half-open range
+  `[start, end)` counts (not per chunk). So sampled totals never exceed the
+  window, and a sample starting exactly at a long task's end belongs to the
+  next task rather than both.
 * Timeline section always covers the whole trace (its job is to locate where
   activity is, so you can choose a window), but marks the window if set.
 
@@ -175,10 +184,13 @@ note, so the agent knows it was checked.
 * main thread(s) and how chosen
 * per profiled thread: busy / idle / program / GC sampled ms
 * main-thread task stats in scope: number of tasks, total busy ms, busy % of
-  scope, count of tasks > 50 ms, **Total Blocking Time** (sum of
-  `dur - 50ms` over tasks longer than 50 ms, after artifact removal; label it
-  "TBT (all tasks in scope)" since we don't bound it by FCP/TTI like
-  Lighthouse does)
+  scope, count of tasks > 50 ms, **Total Blocking Time** (each task's
+  blocking portion is everything after its first 50 ms, after artifact
+  removal, and only the part inside the window counts, as Lighthouse clips
+  to its FCP/TTI range; label it "TBT (all tasks in scope)" since we don't
+  bound it by FCP/TTI). Busy time is the union of task intervals across
+  scope threads clipped to the window, so busy % never exceeds 100% even
+  with several threads in scope.
 * warnings list (truncated file, unpaired B events, no profile, etc.)
 
 ### timeline
@@ -200,7 +212,10 @@ node/type if present), `LayoutShift` (`args.data.score`, exclude
 `had_recent_input`; report total CLS and the largest session window using
 the standard 1 s gap / 5 s cap rule), `MarkDOMContent`, `MarkLoad`.
 Times shown as trace offset and, when `navigationStart` exists, relative to
-it. If none exist (typical for a non-navigation recording), print the note.
+it. Every metric (paints, load markers, layout shifts) is bounded to the
+chosen navigation: from it up to the next navigation, so another page's
+metrics never mix in. If none exist (typical for a non-navigation
+recording), print the note.
 
 ### longtasks
 
@@ -241,7 +256,10 @@ it. If none exist (typical for a non-navigation recording), print the note.
 ### marks
 
 * User Timing: events in category `blink.user_timing`. Instant/marks: name +
-  offset. Measures: `b`/`e` pairs, name + offset + duration.
+  offset. Measures: `b`/`e` pairs, name + offset + duration. Chrome's native
+  navigation-timing marks (`fetchStart`, `loadEventEnd` and so on) are
+  skipped, but only as instant marks; a user measure with one of those names
+  is kept.
 * `TimeStamp` events (from `console.timeStamp`): `args.data.message`.
 * Sorted by offset, top N (show `...N more` when truncated).
 * Filtered by `--match`.
@@ -304,6 +322,10 @@ Captured: url, method, priority, offset, TTFB (response - send), duration
 (finish - send), encoded size (from finish `encodedDataLength`, else summed
 `ResourceReceivedData`), status, mimeType, `fromCache`/`fromServiceWorker`,
 `didFail`. Requests included when send ts is in window and url matches.
+Requests from a different renderer process than the scope (another tab, an
+out-of-process iframe) are dropped; browser and service processes are kept,
+since Chrome may emit a page's own navigation requests there. `--thread all`
+keeps everything. The same rule applies to WebSocket events.
 Sorted by offset. Columns: `offset (ms)`, optional UTC, `ttfb (ms)`,
 `dur (ms)`, `size (KB)`, `status`, `method`, `url`. URLs drop the scheme and
 are middle-truncated to 90 chars (`start...end`). A one-line rollup above the
@@ -317,7 +339,9 @@ Events whose name starts with `WebSocket` (`WebSocketCreate`,
 `WebSocketDestroy`, plus any frame events), grouped by
 `args.data.identifier`. One table of connections: url, created offset,
 handshake ms, destroyed offset (or `open`), event count. Then the raw event
-timeline (offset, event, url), top N.
+timeline (offset, event, url), top N. Counts and rows are window-scoped,
+but each connection's URL comes from the whole trace, since the
+`WebSocketCreate` that carries it may fall before the window.
 
 ## CLI
 

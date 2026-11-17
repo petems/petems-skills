@@ -40,3 +40,19 @@ export function moreLine(more) {
 export function ms(us) {
   return round3(us / 1000);
 }
+
+/**
+ * Predicate for process-level records (network, WebSocket): true when the
+ * pid belongs to a different renderer than the scope, i.e. another tab or
+ * an out-of-process iframe. Browser and service processes are kept, since
+ * Chrome may emit a page's own navigation requests there. `--thread all`
+ * keeps everything.
+ */
+export function otherRendererFilter(ctx) {
+  if (ctx.scope.all) return () => false;
+  const others = new Set();
+  for (const t of ctx.threadByKey.values()) {
+    if (t.name === 'CrRendererMain' && !ctx.scopePids.has(t.pid)) others.add(t.pid);
+  }
+  return (pid) => others.has(pid);
+}

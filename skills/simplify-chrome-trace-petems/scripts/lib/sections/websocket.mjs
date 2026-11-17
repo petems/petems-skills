@@ -1,7 +1,7 @@
 // websocket: connections and lifecycle events.
 
 import { fmtMs, fmtCount, mdTable, round3, shortUrl, byStr } from '../format.mjs';
-import { emptyBlock, heading, offsetFields, offsetHeaders, offsetCells, topN, moreLine } from './common.mjs';
+import { emptyBlock, heading, offsetFields, offsetHeaders, offsetCells, topN, moreLine, otherRendererFilter } from './common.mjs';
 
 /** Group WebSocket events by (pid, identifier). Pure; ts in µs. */
 export function groupSockets(events) {
@@ -21,9 +21,18 @@ export function groupSockets(events) {
 }
 
 export function compute(ctx) {
-  const evs = ctx.model.websocket.filter((e) => typeof e.ts === 'number' && ctx.inWin(e.ts)).sort((a, b) => a.ts - b.ts);
+  // URLs come from the whole trace: the WebSocketCreate that carries a
+  // connection's URL may fall before the window while its later lifecycle
+  // events (which often have no URL) are inside it.
+  const urlOf = new Map();
+  for (const e of ctx.model.websocket) {
+    const key = `${e.pid}|${e.identifier}`;
+    if (e.url && !urlOf.has(key)) urlOf.set(key, e.url);
+  }
+  const otherRenderer = otherRendererFilter(ctx);
+  const evs = ctx.model.websocket.filter((e) => typeof e.ts === 'number' && ctx.inWin(e.ts) && !otherRenderer(e.pid)).sort((a, b) => a.ts - b.ts);
   let conns = groupSockets(evs);
-  const urlOf = new Map(conns.map((c) => [`${c.pid}|${c.identifier}`, c.url]));
+  for (const c of conns) if (!c.url) c.url = urlOf.get(`${c.pid}|${c.identifier}`) || '';
   if (ctx.matcher) conns = conns.filter((c) => ctx.matcher(c.url));
   if (!conns.length) return { connections: [], events: [], more: 0, note: 'No WebSocket activity in scope.' };
   const keep = new Set(conns.map((c) => `${c.pid}|${c.identifier}`));

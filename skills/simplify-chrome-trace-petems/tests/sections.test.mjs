@@ -71,6 +71,24 @@ describe('summary task stats', () => {
     assert.equal(d.tasks.busyMs, 25);
     assert.equal(d.tasks.busyPct, 100);
   });
+
+  it('TBT only counts the blocking portion inside the window', () => {
+    const b = new TraceBuilder().mainThread();
+    b.x('RunTask', BASE, ms(100)); // blocking portion is 50-100 ms
+    b.x('Marker', BASE + ms(200), ms(1));
+    assert.equal(section(b.events, 'summary', { window: '99-150' }).tasks.tbtMs, 1);
+    assert.equal(section(b.events, 'summary', { window: '0-40' }).tasks.tbtMs, 0, 'first 50 ms is not blocking');
+    assert.equal(section(b.events, 'summary', { window: '0-150' }).tasks.tbtMs, 50);
+  });
+
+  it('busy % never exceeds 100% with several threads in scope', () => {
+    const b = new TraceBuilder().mainThread().threadName(100, 2, 'CrRendererMain');
+    b.x('RunTask', BASE, ms(100));
+    b.x('RunTask', BASE, ms(100), { tid: 2 });
+    const d = section(b.events, 'summary', { thread: 'all' });
+    assert.equal(d.tasks.busyMs, 100);
+    assert.ok(d.tasks.busyPct <= 100);
+  });
 });
 
 describe('timeline', () => {
@@ -168,6 +186,15 @@ describe('interactions', () => {
 });
 
 describe('marks', () => {
+  it('keeps a user measure named like a navigation-timing mark', () => {
+    const b = new TraceBuilder().mainThread();
+    b.x('RunTask', BASE, 10);
+    b.instant('loadEventEnd', BASE + ms(1), { cat: 'blink.user_timing', args: { frame: 'F' } }); // native mark
+    b.measure('loadEventEnd', BASE + ms(3), ms(7)); // user measure with the same name
+    const d = section(b.events, 'marks');
+    assert.deepEqual(d.rows.map((r) => [r.kind, r.name, r.durMs]), [['measure', 'loadEventEnd', 7]]);
+  });
+
   it('lists marks, paired measures and console.timeStamp sorted by offset, filtered by --match', () => {
     const b = new TraceBuilder().mainThread();
     b.x('RunTask', BASE, 10);
@@ -189,6 +216,17 @@ describe('marks', () => {
 });
 
 describe('network', () => {
+  it('drops other renderers requests but keeps the browser process', () => {
+    const b = new TraceBuilder().mainThread().threadName(200, 1, 'CrRendererMain').threadName(1, 1, 'CrBrowserMain');
+    b.x('RunTask', BASE, ms(1));
+    b.request({ requestId: 'p', url: 'https://page.test/', sendTs: BASE + ms(1) });
+    b.request({ requestId: 'o', url: 'https://other-tab.test/', sendTs: BASE + ms(2), pid: 200 });
+    b.request({ requestId: 'b', url: 'https://page.test/doc', sendTs: BASE + ms(3), pid: 1 });
+    const urls = (o) => section(b.events, 'network', o).rows.map((r) => r.url);
+    assert.deepEqual(urls({}), ['https://page.test/', 'https://page.test/doc']);
+    assert.equal(urls({ thread: 'all' }).length, 3);
+  });
+
   it('builds rollup, sizes, TTFB and truncates long URLs', () => {
     const long = 'https://cdn.example.com/' + 'a'.repeat(150) + '/end.js';
     const b = new TraceBuilder().mainThread();
@@ -212,6 +250,16 @@ describe('network', () => {
 });
 
 describe('websocket', () => {
+  it('keeps a connection URL when WebSocketCreate is before the window', () => {
+    const b = new TraceBuilder().mainThread();
+    b.x('RunTask', BASE, ms(1));
+    b.websocket(7, 'wss://sock.test/feed', [['WebSocketCreate', BASE + ms(1)], ['WebSocketSendHandshakeRequest', BASE + ms(50)], ['WebSocketDestroy', BASE + ms(90)]]);
+    const d = section(b.events, 'websocket', { window: '40-100', match: 'sock.test' });
+    assert.equal(d.connections.length, 1);
+    assert.equal(d.connections[0].url, 'wss://sock.test/feed');
+    assert.equal(d.connections[0].events, 2, 'counts stay window-scoped');
+  });
+
   it('groups by identifier with handshake and lifecycle', () => {
     const b = new TraceBuilder().mainThread();
     b.x('RunTask', BASE, 10);
@@ -229,6 +277,37 @@ describe('websocket', () => {
 });
 
 describe('vitals', () => {
+  const twoNavs = (withFirstFcp) => {
+    const b = new TraceBuilder().mainThread();
+    const nav = (t, url) => b.instant('navigationStart', BASE + ms(t), { cat: 'blink.user_timing', args: { frame: 'F1', data: { documentLoaderURL: url, isLoadingMainFrame: true } } });
+    const at = (name, t, data = {}) => b.instant(name, BASE + ms(t), { cat: 'loading', args: { frame: 'F1', data } });
+    nav(0, 'https://a.test/one');
+    if (withFirstFcp) at('firstContentfulPaint', 100);
+    at('largestContentfulPaint::Candidate', 200, { size: 1 });
+    b.instant('LayoutShift', BASE + ms(50), { args: { frame: 'F1', data: { score: 0.3, had_recent_input: false } } });
+    nav(1000, 'https://a.test/two');
+    at('firstContentfulPaint', 1100);
+    at('largestContentfulPaint::Candidate', 1200, { size: 2 });
+    b.instant('LayoutShift', BASE + ms(1150), { args: { frame: 'F1', data: { score: 0.01, had_recent_input: false } } });
+    return section(b.events, 'vitals');
+  };
+
+  it('keeps every metric within the chosen navigation', () => {
+    const d = twoNavs(true); // first navigation is chosen (precedes the first paint)
+    const lcp = d.rows.find((r) => r.metric === 'Largest Contentful Paint');
+    assert.equal(lcp.sinceNavMs, 200, 'not the second page LCP');
+    assert.equal(d.cls.shifts, 1);
+    assert.equal(d.cls.total, 0.3);
+  });
+
+  it('does not count an earlier page layout shifts in CLS', () => {
+    const d = twoNavs(false); // only the second page painted, so it is chosen
+    assert.equal(d.rows.find((r) => r.metric === 'Navigation start').detail, 'a.test/two');
+    assert.equal(d.cls.shifts, 1);
+    assert.equal(d.cls.total, 0.01);
+    assert.ok(d.rows.every((r) => r.sinceNavMs >= 0), 'no negative nav-relative times');
+  });
+
   it('reports nav-relative times and CLS session windows', () => {
     const d = section(richTrace().events, 'vitals');
     const fcp = d.rows.find((r) => r.metric === 'First Contentful Paint');

@@ -135,9 +135,14 @@ export function buildProfiles(rawProfiles) {
     };
 
     const start = typeof p.startTime === 'number' ? p.startTime : 0;
-    const { times, durs } = sampleTimes(start, p.deltas);
-    const nodeArr = new Int32Array(times.length);
+    let { times, durs } = sampleTimes(start, p.deltas);
+    let nodeArr = new Int32Array(times.length);
     for (let i = 0; i < times.length; i++) nodeArr[i] = resolve(p.samples[i]);
+    // V8 can emit negative timeDeltas (out-of-order samples). Sort within
+    // this profile and recompute durations on the sorted timeline: otherwise
+    // the backwards step clamps to 0 and the next forward step double counts
+    // the same wall time. Durations never span two profiles.
+    if (!isSorted(times)) ({ times, durs, node: nodeArr } = sortSamples(times, nodeArr));
     const key = `${p.pid}:${p.tid}`;
     let th = perThread.get(key);
     if (!th) perThread.set(key, (th = { key, pid: p.pid, tid: p.tid, parts: [] }));
@@ -164,15 +169,28 @@ export function buildProfiles(rawProfiles) {
     for (let j = 0; j < total; j++) {
       const [, pi, i] = order[j];
       times[j] = th.parts[pi].times[i];
+      durs[j] = th.parts[pi].durs[i];
       node[j] = th.parts[pi].node[i];
     }
-    // Recompute durations on the merged, sorted timeline. Per-part durations
-    // are wrong for out-of-order samples: the backwards step clamps to 0 but
-    // the following forward step double counts the same wall time.
-    fillDurations(times, durs);
+    // Keep each profile's own durations: recomputing across the merged
+    // timeline would hand the gap between two recordings to one sample.
     threads.set(key, { key, pid: th.pid, tid: th.tid, times, durs, node });
   }
   return { frames, nodes, threads };
+}
+
+/** Sort one profile's samples by time and recompute their durations. */
+function sortSamples(times, node) {
+  const idx = Array.from(times, (_, i) => i).sort((a, b) => times[a] - times[b] || a - b);
+  const t = new Float64Array(idx.length);
+  const n = new Int32Array(idx.length);
+  for (let j = 0; j < idx.length; j++) {
+    t[j] = times[idx[j]];
+    n[j] = node[idx[j]];
+  }
+  const d = new Float64Array(idx.length);
+  fillDurations(t, d);
+  return { times: t, durs: d, node: n };
 }
 
 function isSorted(a) {
@@ -193,22 +211,32 @@ export function lowerBound(times, t) {
 }
 
 /**
- * Aggregate one thread's samples whose own timestamp is in [start, end].
- * Adds into `acc` (created when omitted).
+ * Aggregate one thread's sampled time inside the half-open range
+ * [start, end). Each sample covers [t, t + dur); only the part that overlaps
+ * the range counts, so totals never exceed the range and a sample starting
+ * exactly at `end` belongs to whatever comes next (adjacent tasks never
+ * share a sample). Adds into `acc` (created when omitted).
  */
 export function aggregateSamples(prof, th, start, end, acc) {
   const a = acc || { self: new Map(), total: new Map(), idle: 0, program: 0, gc: 0, other: 0, sampled: 0, first: Infinity, last: -Infinity, count: 0 };
   const { times, durs, node } = th;
   const nodes = prof.nodes;
+  const lo = Number.isFinite(start) ? start : -Infinity;
+  const hi = Number.isFinite(end) ? end : Infinity;
   let i = Number.isFinite(start) ? lowerBound(times, start) : 0;
+  // Samples that start before the range may still run into it.
+  while (i > 0 && times[i - 1] + durs[i - 1] > lo) i--;
   for (; i < times.length; i++) {
     const t = times[i];
-    if (t > end) break;
-    const d = durs[i];
+    if (t >= hi) break;
+    const s0 = t > lo ? t : lo;
+    const s1 = t + durs[i] < hi ? t + durs[i] : hi;
+    const d = s1 - s0;
+    if (d <= 0 && !(durs[i] === 0 && t >= lo)) continue;
     a.count++;
     a.sampled += d;
-    if (t < a.first) a.first = t;
-    if (t + d > a.last) a.last = t + d;
+    if (s0 < a.first) a.first = s0;
+    if (s1 > a.last) a.last = s1;
     const nd = nodes[node[i]];
     switch (nd.kind) {
       case KIND_IDLE:

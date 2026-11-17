@@ -50,7 +50,12 @@ export function compute(ctx) {
       nav = before.length ? before[before.length - 1] : navs[0];
     } else nav = navs[0];
   }
-  const after = (list) => (nav ? list.filter((v) => v.ts >= nav.ts) : list);
+  // Every metric belongs to the chosen navigation: from it up to (not
+  // including) the next one, so a later page's paints or an earlier page's
+  // layout shifts never mix in.
+  const nextNav = nav ? navs.find((n) => n.ts > nav.ts) : null;
+  const navEnd = nextNav ? nextNav.ts : Infinity;
+  const after = (list) => (nav ? list.filter((v) => v.ts >= nav.ts && v.ts < navEnd) : list);
   const rows = [];
   const row = (metric, ts, detail, value = null) => {
     rows.push({
@@ -78,7 +83,7 @@ export function compute(ctx) {
   if (dcl) row('DOMContentLoaded', dcl.ts, '');
   const load = after(of('MarkLoad'))[0];
   if (load) row('Load', load.ts, '');
-  const shifts = of('LayoutShift').filter((s) => !s.hadRecentInput);
+  const shifts = after(of('LayoutShift')).filter((s) => !s.hadRecentInput);
   let cls = null;
   if (shifts.length) {
     const { total, largest } = clsSessions(shifts);

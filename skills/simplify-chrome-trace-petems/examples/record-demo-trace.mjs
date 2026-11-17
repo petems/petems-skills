@@ -105,20 +105,26 @@ async function launchChrome(profileDir) {
     ],
     { stdio: ['ignore', 'ignore', 'pipe'] },
   );
-  const wsUrl = await new Promise((resolve, reject) => {
-    let buf = '';
-    const timer = setTimeout(() => reject(new Error('Chrome did not start within 15s')), 15000);
-    chrome.stderr.on('data', (d) => {
-      buf += d;
-      const m = buf.match(/DevTools listening on (ws:\/\/\S+)/);
-      if (m) {
-        clearTimeout(timer);
-        resolve(m[1]);
-      }
+  let timer;
+  try {
+    const wsUrl = await new Promise((resolve, reject) => {
+      let buf = '';
+      timer = setTimeout(() => reject(new Error('Chrome did not start within 15s')), 15000);
+      chrome.on('error', reject);
+      chrome.stderr.on('data', (d) => {
+        buf += d;
+        const m = buf.match(/DevTools listening on (ws:\/\/\S+)/);
+        if (m) resolve(m[1]);
+      });
+      chrome.on('exit', (code) => reject(new Error(`Chrome exited early (code ${code})`)));
     });
-    chrome.on('exit', (code) => reject(new Error(`Chrome exited early (code ${code})`)));
-  });
-  return { chrome, wsUrl };
+    return { chrome, wsUrl };
+  } catch (err) {
+    chrome.kill(); // don't leave a half-started Chrome behind
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function cdpClient(wsUrl) {
@@ -126,6 +132,20 @@ function cdpClient(wsUrl) {
   let nextId = 1;
   const pending = new Map();
   const listeners = new Map();
+  const waiters = new Set(); // rejectors for in-flight waitFor() calls
+  let closedError = null;
+  // If Chrome goes away, fail every in-flight command and event wait instead
+  // of hanging forever.
+  const fail = (why) => {
+    if (closedError) return;
+    closedError = new Error(`Chrome disconnected (${why})`);
+    for (const { reject } of pending.values()) reject(closedError);
+    pending.clear();
+    for (const reject of waiters) reject(closedError);
+    waiters.clear();
+  };
+  ws.addEventListener('close', () => fail('connection closed'));
+  ws.addEventListener('error', () => fail('connection error'));
   ws.addEventListener('message', (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.id && pending.has(msg.id)) {
@@ -144,6 +164,7 @@ function cdpClient(wsUrl) {
   return {
     ready,
     send(method, params = {}, sessionId) {
+      if (closedError) return Promise.reject(closedError);
       const id = nextId++;
       ws.send(JSON.stringify({ id, method, params, sessionId }));
       return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
@@ -152,7 +173,21 @@ function cdpClient(wsUrl) {
       if (!listeners.has(method)) listeners.set(method, []);
       listeners.get(method).push(fn);
     },
-    close: () => ws.close(),
+    /** Resolve on the next `method` event; reject if Chrome disconnects first. */
+    waitFor(method) {
+      if (closedError) return Promise.reject(closedError);
+      return new Promise((resolve, reject) => {
+        waiters.add(reject);
+        this.on(method, (params) => {
+          waiters.delete(reject);
+          resolve(params);
+        });
+      });
+    },
+    close: () => {
+      closedError = closedError || new Error('closed');
+      ws.close();
+    },
   };
 }
 
@@ -231,7 +266,7 @@ function privacyProblems(text, port) {
     if (value && value.length >= 3 && text.includes(value)) problems.push(`${label} (${value})`);
   }
   if (/chrome-extension:\/\//.test(text)) problems.push('a chrome-extension:// URL');
-  const urls = text.match(/\b(?:https?|wss?):\/\/[^\s"'\\)]+/g) || [];
+  const urls = text.match(/\b(?:https?|wss?|file):\/\/[^\s"'\\)]+/g) || [];
   const origin = `http://127.0.0.1:${port}`;
   const foreign = [...new Set(urls)].filter((u) => u !== origin && !u.startsWith(`${origin}/`));
   if (foreign.length) problems.push(`non-demo URLs: ${foreign.slice(0, 5).join(', ')}`);
@@ -240,12 +275,19 @@ function privacyProblems(text, port) {
 
 async function main() {
   if (!chromePath) throw new Error('No Chrome found. Pass --chrome PATH or set CHROME_PATH.');
-  const server = await serveDemo();
-  const port = server.address().port;
-  const profileDir = mkdtempSync(join(tmpdir(), 'demo-trace-profile-'));
-  const { chrome, wsUrl } = await launchChrome(profileDir);
-  const cdp = cdpClient(wsUrl);
+  // Declared before anything is acquired so `finally` cleans up whatever
+  // got started, even if a later step (like launching Chrome) fails.
+  let server;
+  let profileDir;
+  let chrome;
+  let cdp;
   try {
+    server = await serveDemo();
+    const port = server.address().port;
+    profileDir = mkdtempSync(join(tmpdir(), 'demo-trace-profile-'));
+    let wsUrl;
+    ({ chrome, wsUrl } = await launchChrome(profileDir));
+    cdp = cdpClient(wsUrl);
     await cdp.ready;
     const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
     const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
@@ -254,7 +296,7 @@ async function main() {
 
     const events = [];
     cdp.on('Tracing.dataCollected', (p) => events.push(...p.value));
-    const done = new Promise((resolve) => cdp.on('Tracing.tracingComplete', resolve));
+    const done = cdp.waitFor('Tracing.tracingComplete');
 
     // Screencast frames arrive only after each one is acknowledged.
     const screenshots = [];
@@ -273,7 +315,7 @@ async function main() {
     });
     await sleep(300);
 
-    const loaded = new Promise((resolve) => cdp.on('Page.loadEventFired', resolve));
+    const loaded = cdp.waitFor('Page.loadEventFired');
     await cdp.send('Page.navigate', { url: `http://127.0.0.1:${port}/` }, sessionId);
     await loaded;
     // Pauses are long enough for a viewer to see smooth motion between the
@@ -307,11 +349,11 @@ async function main() {
     );
     if (wantVideo) writeVideo(screenshots, join(dirname(outFile), 'demo-recording'));
   } finally {
-    cdp.close();
-    chrome.kill();
-    server.close();
+    cdp?.close();
+    chrome?.kill();
+    server?.close();
     await sleep(300);
-    rmSync(profileDir, { recursive: true, force: true });
+    if (profileDir) rmSync(profileDir, { recursive: true, force: true });
   }
 }
 

@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, symlinkSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { parseArgs } from '../scripts/lib/args.mjs';
@@ -14,6 +14,13 @@ const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 's
 const run = (...args) => spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8' });
 
 describe('argument parsing', () => {
+  it('treats a known flag after a value flag as a missing value', () => {
+    assert.throws(() => parseArgs(['t.json', '--out', '--all']), (e) => e instanceof UsageError && /--out needs a value/.test(e.message));
+    assert.throws(() => parseArgs(['t.json', '--match', '--top=5']), UsageError);
+    assert.equal(parseArgs(['t.json', '--out=--all']).out, '--all', 'explicit = form is a literal');
+    assert.deepEqual(parseArgs(['t.json', '--window', '-100']).options.window, { kind: 'range', startMs: null, endMs: 100 });
+  });
+
   it('accepts --flag value and --flag=value', () => {
     const a = parseArgs(['t.json', '--top', '5', '--long-task-ms=80', '--window=10-20', '--bucket', '250', '--thread', 'all', '--match=x', '--wall-clock', '--format', 'json', '--out', 'o.md']);
     assert.equal(a.file, 't.json');
@@ -56,6 +63,18 @@ describe('argument parsing', () => {
 });
 
 describe('CLI (child process)', () => {
+  it('refuses to write the report over the input trace, including via a symlink', () => {
+    const file = writeTemp('in.json', richTrace().toJSON());
+    const before = readFileSync(file, 'utf8');
+    const r = run(file, '--out', file);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /refusing to write the report over the input trace/);
+    const link = file.replace(/in\.json$/, 'link.json');
+    symlinkSync(file, link);
+    assert.equal(run(file, '--out', link).status, 1);
+    assert.equal(readFileSync(file, 'utf8'), before, 'input untouched');
+  });
+
   it('--help and --list exit 0', () => {
     const h = run('--help');
     assert.equal(h.status, 0);

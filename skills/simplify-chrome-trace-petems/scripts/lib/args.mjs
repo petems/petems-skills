@@ -85,6 +85,12 @@ export function parseArgs(argv) {
     if (!VALUE_FLAGS.has(a)) throw new UsageError(`unknown flag ${a}`);
     if (value === undefined) {
       if (i + 1 >= argv.length) throw new UsageError(`${a} needs a value`);
+      // `--out --all` means the value is missing, not a file called --all.
+      // Only exact known flags count, so `--window -100` still works and an
+      // odd literal can be passed as `--out=--all`.
+      const next = argv[i + 1];
+      const nextFlag = next.startsWith('--') && next.includes('=') ? next.slice(0, next.indexOf('=')) : next;
+      if (VALUE_FLAGS.has(nextFlag) || BOOL_FLAGS.has(nextFlag)) throw new UsageError(`${a} needs a value (got the flag ${next})`);
       value = argv[++i];
     }
     if (value === '') throw new UsageError(`${a} needs a value`);

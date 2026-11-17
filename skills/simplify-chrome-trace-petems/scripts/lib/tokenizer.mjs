@@ -6,17 +6,30 @@
 // single JS string. The `metadata` object is captured too, wherever it
 // appears. State is carried across chunks, so chunk boundaries can fall
 // anywhere (inside strings, escapes, keys, numbers).
+//
+// Each chunk is scanned once. A value that spans chunks is kept as a list of
+// pieces and joined only when it is complete, so a huge value (DevTools can
+// store multi-MB source maps in `metadata`) costs linear time rather than
+// re-copying a growing prefix on every chunk.
+//
+// The top-level structure is validated strictly (commas between elements,
+// no trailing commas, nothing after the end); event contents are validated
+// by JSON.parse.
 
 import { UserError } from './errors.mjs';
 
 const START = 0;
-const OBJ_KEY_WAIT = 1; // top-level object, waiting for a key (or `}`)
+const OBJ_FIRST = 1; // top-level object just opened: a key or `}`
 const OBJ_KEY = 2; // inside a top-level key string
 const OBJ_COLON = 3;
 const OBJ_VALUE_WAIT = 4;
 const VALUE = 5; // scanning a JSON value
-const ARR_ELEM_WAIT = 6; // inside the events array, between elements
+const ARR_FIRST = 6; // events array just opened: an element or `]`
 const DONE = 7;
+const OBJ_AFTER_VALUE = 8; // `,` or `}`
+const OBJ_AFTER_COMMA = 9; // a key (a `}` here is a trailing comma)
+const ARR_AFTER_ELEM = 10; // `,` or `]`
+const ARR_AFTER_COMMA = 11; // an element (a `]` here is a trailing comma)
 
 const KIND_CONTAINER = 0;
 const KIND_STRING = 1;
@@ -35,8 +48,6 @@ export class TraceTokenizer {
   constructor(onEvent) {
     this.onEvent = onEvent;
     this.state = START;
-    this.carry = '';
-    this.pos = 0;
     this.topIsArray = false;
     this.eventsInObject = false;
     this.foundEvents = false;
@@ -46,6 +57,7 @@ export class TraceTokenizer {
     this.key = '';
     this.keyStart = 0;
     this.keyEsc = false;
+    this.keyParts = []; // pieces of a key that spans chunks
     // value scanner
     this.vStart = 0;
     this.vDepth = 0;
@@ -53,7 +65,8 @@ export class TraceTokenizer {
     this.vEsc = false;
     this.vKind = KIND_CONTAINER;
     this.vTarget = TARGET_DISCARD;
-    this.vReturn = OBJ_KEY_WAIT;
+    this.vReturn = OBJ_AFTER_VALUE;
+    this.vParts = []; // pieces of a captured value that spans chunks
     this.warnings = [];
   }
 
@@ -100,9 +113,9 @@ export class TraceTokenizer {
   /** @param {string} chunk */
   push(chunk) {
     if (!chunk) return;
-    const buf = this.carry ? this.carry + chunk : chunk;
+    const buf = chunk;
     const n = buf.length;
-    let i = this.pos;
+    let i = 0;
     let state = this.state;
 
     while (i < n) {
@@ -152,7 +165,11 @@ export class TraceTokenizer {
         this.vInStr = s;
         this.vEsc = e;
         if (ended >= 0) {
-          if (this.vTarget !== TARGET_DISCARD) this._finishValue(buf.slice(this.vStart, ended));
+          if (this.vTarget !== TARGET_DISCARD) {
+            const tail = buf.slice(this.vStart, ended);
+            this._finishValue(this.vParts.length ? this.vParts.join('') + tail : tail);
+            this.vParts = [];
+          }
           state = this.vReturn;
           if (reprocess) continue;
         }
@@ -166,36 +183,47 @@ export class TraceTokenizer {
           if (c === 91) {
             this.topIsArray = true;
             this.foundEvents = true;
-            state = ARR_ELEM_WAIT;
+            state = ARR_FIRST;
           } else if (c === 123) {
-            state = OBJ_KEY_WAIT;
+            state = OBJ_FIRST;
           } else if (c === 34 || c === 45 || (c >= 48 && c <= 57)) {
             throw new UserError('no traceEvents array and not an array');
           } else {
             throw new UserError('not JSON (expected an object or array)');
           }
           break;
-        case OBJ_KEY_WAIT:
-          if (isWs(c) || c === 44) break;
+        case OBJ_FIRST:
+        case OBJ_AFTER_COMMA:
+          if (isWs(c)) break;
           if (c === 34) {
             state = OBJ_KEY;
             this.keyStart = i + 1;
             this.keyEsc = false;
-          } else if (c === 125) {
+          } else if (c === 125 && state === OBJ_FIRST) {
             state = DONE;
+          } else if (c === 125) {
+            throw new UserError('not JSON (trailing comma in top-level object)');
           } else {
             throw new UserError('not JSON (unexpected character in top-level object)');
           }
+          break;
+        case OBJ_AFTER_VALUE:
+          if (isWs(c)) break;
+          if (c === 44) state = OBJ_AFTER_COMMA;
+          else if (c === 125) state = DONE;
+          else throw new UserError('not JSON (expected "," or "}" in top-level object)');
           break;
         case OBJ_KEY:
           if (this.keyEsc) this.keyEsc = false;
           else if (c === 92) this.keyEsc = true;
           else if (c === 34) {
+            const tail = buf.slice(this.keyStart - 1, i + 1);
             try {
-              this.key = JSON.parse(buf.slice(this.keyStart - 1, i + 1));
+              this.key = JSON.parse(this.keyParts.length ? this.keyParts.join('') + tail : tail);
             } catch {
               this.key = '';
             }
+            this.keyParts = [];
             state = OBJ_COLON;
           }
           break;
@@ -209,45 +237,58 @@ export class TraceTokenizer {
           if (this.key === 'traceEvents' && c === 91 && !this.foundEvents) {
             this.foundEvents = true;
             this.eventsInObject = true;
-            state = ARR_ELEM_WAIT;
+            state = ARR_FIRST;
           } else {
             const target = this.key === 'metadata' ? TARGET_METADATA : TARGET_DISCARD;
-            this._beginValue(i, c, target, OBJ_KEY_WAIT);
+            this._beginValue(i, c, target, OBJ_AFTER_VALUE);
             state = VALUE;
             if (this.vKind === KIND_PRIMITIVE) continue; // rescan this char as part of value
           }
           break;
-        case ARR_ELEM_WAIT:
-          if (isWs(c) || c === 44) break;
-          if (c === 93) {
+        case ARR_FIRST:
+        case ARR_AFTER_COMMA:
+          if (isWs(c)) break;
+          if (c === 93 && state === ARR_FIRST) {
             this.eventsClosed = true;
-            state = this.eventsInObject ? OBJ_KEY_WAIT : DONE;
+            state = this.eventsInObject ? OBJ_AFTER_VALUE : DONE;
+          } else if (c === 93) {
+            throw new UserError('not JSON (trailing comma in traceEvents)');
+          } else if (c === 44) {
+            throw new UserError('not JSON (unexpected "," in traceEvents)');
           } else {
-            this._beginValue(i, c, TARGET_EVENT, ARR_ELEM_WAIT);
+            this._beginValue(i, c, TARGET_EVENT, ARR_AFTER_ELEM);
             state = VALUE;
             if (this.vKind === KIND_PRIMITIVE) continue;
           }
           break;
+        case ARR_AFTER_ELEM:
+          if (isWs(c)) break;
+          if (c === 44) {
+            state = ARR_AFTER_COMMA;
+          } else if (c === 93) {
+            this.eventsClosed = true;
+            state = this.eventsInObject ? OBJ_AFTER_VALUE : DONE;
+          } else {
+            throw new UserError(`not JSON (expected "," or "]" after trace event #${this.eventCount})`);
+          }
+          break;
         case DONE:
         default:
+          if (!isWs(c)) throw new UserError('not JSON (unexpected data after the end of the trace)');
           break;
       }
       i++;
     }
 
-    // Keep any partial token for the next chunk.
+    // Keep the piece of any partial token; the next chunk continues it from
+    // index 0.
     if (state === VALUE && this.vTarget !== TARGET_DISCARD) {
-      this.carry = buf.slice(this.vStart);
-      this.pos = this.carry.length;
+      this.vParts.push(buf.slice(this.vStart));
       this.vStart = 0;
     } else if (state === OBJ_KEY) {
-      const from = this.keyStart - 1;
-      this.carry = buf.slice(from);
-      this.pos = this.carry.length;
+      this.keyParts.push(buf.slice(this.keyStart - 1));
       this.keyStart = 1;
     } else {
-      this.carry = '';
-      this.pos = 0;
       this.vStart = 0;
     }
     this.state = state;
