@@ -44,6 +44,13 @@ SEED_CALL = (
 class FakeMy3:
     def __init__(self) -> None:
         self.spa_calls_seed = True
+        # Reproduce a restart: /account's guard needs sessionStorage, which is
+        # rebuilt via /customer-login -> silent /authorize on another host ->
+        # /customer-logged -> /account (live, 2026-11-17).
+        self.needs_recovery = False
+        self.auth_form = False  # the silent /authorize shows the Auth0 form
+        self.guard_delay_ms = 1200  # /account shows, then its guard redirects
+        self.port = 0
         self.pdf_requires_page = False  # reject requests without sec-fetch-mode
         self.tokens = iter(f"tok{i}" for i in range(1000))
         self.valid: set[str] = set()
@@ -81,9 +88,45 @@ def make_handler(state: FakeMy3):
         def do_GET(self):
             path = self.path.split("?")[0]
             state.log.append((path, self.headers.get("authorization")))
+            if path == "/authorize":  # served as "localhost": another host
+                if state.auth_form:
+                    return self.send(302, headers={"Location": "/u/login"})
+                return self.send(
+                    302,
+                    headers={
+                        "Location": f"http://127.0.0.1:{state.port}/customer-logged"
+                    },
+                )
+            if path == "/u/login":
+                return self.send(200, b"<form>Auth0</form>", "text/html")
+            if path == "/customer-logged" and state.needs_recovery:
+                html = (
+                    "<script>sessionStorage.setItem('recovered', '1');"
+                    "setTimeout(() => location.replace('/account'), 300);</script>"
+                )
+                return self.send(200, html.encode(), "text/html")
+            if path == "/customer-login" and state.needs_recovery and self.signed_in():
+                html = (
+                    "<script>location.replace("
+                    f"'http://localhost:{state.port}/authorize');</script>"
+                )
+                return self.send(200, html.encode(), "text/html")
             if path == "/account":
                 if not self.signed_in():
                     return self.send(302, headers={"Location": "/customer-login"})
+                if state.needs_recovery:
+                    # Live, /account renders briefly and then its guard
+                    # redirects; mimic both an early and a late redirect.
+                    guard = (
+                        "<head><script>if (!sessionStorage.getItem('recovered'))"
+                        " setTimeout(() => location.replace('/customer-login'),"
+                        f" {state.guard_delay_ms});</script></head>"
+                    )
+                    html = guard + ACCOUNT_HTML % {
+                        "cuid": CUID,
+                        "seed_call": SEED_CALL if state.spa_calls_seed else "",
+                    }
+                    return self.send(200, html.encode(), "text/html")
                 html = ACCOUNT_HTML % {
                     "cuid": CUID,
                     "seed_call": SEED_CALL if state.spa_calls_seed else "",
@@ -157,6 +200,7 @@ def fake():
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    state.port = server.server_address[1]
     yield state, Site(f"http://127.0.0.1:{server.server_address[1]}")
     server.shutdown()
 
@@ -246,3 +290,23 @@ async def test_signed_out_fails_fast_with_login_hint(tmp_path, fake):
         assert time.monotonic() - started < 10
     finally:
         await cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("guard_delay_ms", [0, 1200])
+async def test_recovers_like_the_live_spa_after_a_restart(launched, guard_delay_ms):
+    state, site, browser = launched
+    state.needs_recovery = True
+    state.guard_delay_ms = guard_delay_ms
+    account = await My3(browser, site).open_account()
+    assert account.cuid == CUID
+
+
+async def test_auth0_form_during_recovery_fails_fast(launched):
+    state, site, browser = launched
+    state.needs_recovery = True
+    state.auth_form = True
+    started = time.monotonic()
+    with pytest.raises(NotLoggedInError) as info:
+        await My3(browser, site).open_account()
+    assert info.value.code == "sign_in_required"
+    assert time.monotonic() - started < 10

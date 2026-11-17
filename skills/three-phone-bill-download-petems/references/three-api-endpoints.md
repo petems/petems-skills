@@ -1,12 +1,24 @@
 # Three UK My3 API (frozen snapshot)
 
-**Last verified: 2026-11-17** by a live `three-bill login` and `download --latest`
-against a personal account on `www.three.co.uk`. Login state lives in the
-no-expiry `WIRELESS_SECURITY_TOKEN` and `USER_SESSION_STATUS` cookies, which the
-CLI carries across runs (`~/.three-bill/session-cookies.json`); the SPA rebuilds
-its sessionStorage from them. After Auth0, wait for the SPA to reach `/account`
-and write `persist:user` before navigating, or `/account` bounces to
-`/customer-login`.
+**Last verified: 2026-11-17** by live `three-bill login`, `list` and
+`download --latest` against a personal account on `www.three.co.uk`.
+
+Session behaviour across `three-bill` runs (seen live, 2026-11-17):
+
+- `WIRELESS_SECURITY_TOKEN` and `USER_SESSION_STATUS` have no expiry, so the
+  CLI carries them in `~/.three-bill/session-cookies.json`. With them, the
+  server still answers `isAnonymous: false` after a restart.
+- My3's sessionStorage does not survive a restart, so the `/account` guard
+  renders briefly and then redirects to `/customer-login`. That page runs a
+  silent Auth0 `/authorize`, lands on `/customer-logged`, rebuilds its state
+  and moves itself to `/account`. `My3.wait_for_account` lets this finish and
+  only accepts `/account` once the page has stayed there.
+- The silent step only works while the Auth0 session lives, about 20 minutes
+  after the last sign-in. After that Auth0 shows its form (`/u/login`) and the
+  CLI exits 3 with `sign_in_required`: the user runs `three-bill login`.
+- After a fresh sign-in, wait for the SPA to reach `/account` and write
+  `persist:user` before navigating, or `/account` bounces to
+  `/customer-login`.
 
 This file is the contract the `three-bill` CLI depends on. The checks that
 enforce it live in `three-bill/three_bill/contract.py` (pure, unit-tested) and

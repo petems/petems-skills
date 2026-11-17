@@ -188,7 +188,7 @@ The CLI names the file; do not rename it.
 | n/a | `three-bill: command not found` | Install it (Prerequisites), or use the `uv run --project` form |
 | 3 | `no_profile` | First run. Ask the user to run `! three-bill login` |
 | 3 | `session_not_authenticated`, `auth_check_failed`, `auth_check_unparseable` | Auth0 may have logged in while My3 stayed anonymous, or the session expired. Only `isAnonymous === false` counts. Ask the user to run `! three-bill login` |
-| 3 | `redirected_to_sign_in`, `not_on_account_page`, `seed_unauthorized`, `list_unauthorized` | Session expired. Ask the user to run `! three-bill login`, then retry once |
+| 3 | `sign_in_required`, `redirected_to_sign_in`, `not_on_account_page`, `seed_unauthorized`, `list_unauthorized` | Session expired (My3 keeps you signed in for only about 20 minutes after a sign-in). Ask the user to run `! three-bill login`, then retry once |
 | 3 | `login_timeout` | (From `login`.) The user did not finish signing in. They can re-run it, with `--timeout 0` for no limit |
 | 4 | `profile_busy`, `profile_busy_stray_chromium` | Another run holds the profile. Wait and retry; never delete lock files |
 | 5 | `seed_shape_changed`, `no_auth_header` | Three changed the seed response. Report with diagnostics (step 3) |

@@ -42,7 +42,10 @@ TOOL_NAME = "three-bill"
 
 NAV_TIMEOUT_MS = 30_000
 SEED_CAPTURE_TIMEOUT_SECONDS = 30.0
-AUTH_BOUNCE_TIMEOUT_SECONDS = 20.0
+ACCOUNT_RECOVERY_TIMEOUT_SECONDS = 45.0
+SIGN_IN_ROUTE_GRACE_SECONDS = 6.0
+ACCOUNT_STABLE_SECONDS = 3.0
+LANDING_STALL_SECONDS = 15.0
 API_TIMEOUT_MS = 30_000
 PDF_TIMEOUT_MS = 60_000
 PDF_MIN_BYTES = 100_000
@@ -93,6 +96,25 @@ def is_account_url(url: str, site: Site) -> bool:
         return False
     path = urlsplit(url).path.rstrip("/")
     return path == "/account" or path.startswith("/account/")
+
+
+def recovery_step(url: str, site: Site) -> str:
+    """Where the SPA is on its way back to /account.
+
+    ``account`` done; ``auth_form`` the Auth0 sign-in form (a human is
+    needed); ``auth_silent`` any other Auth0 hop; ``sign_in_route`` a www
+    sign-in route; ``landing`` any other www page (e.g. /customer-logged).
+    """
+    if is_account_url(url, site):
+        return "account"
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if host and host != site.host:
+        path = (parts.path or "/").lower()
+        return "auth_form" if path.startswith("/u/") else "auth_silent"
+    if auth_barrier(url, site):
+        return "sign_in_route"
+    return "landing"
 
 
 def validate_pdf(
@@ -260,6 +282,81 @@ class My3:
             code="auth_check_unreachable",
         ) from last
 
+    async def goto_account(self) -> None:
+        """Load /account, letting the SPA's own redirects interrupt the load.
+
+        The /account guard can redirect before the load finishes, and
+        Patchright then reports the interrupted navigation while the page is
+        on Auth0 (live, 2026-11-17). That is the start of the SPA's recovery,
+        not proof of a signed-out session: :meth:`wait_for_account` decides.
+        """
+        try:
+            await goto(self.page, self.site.account_url, self.site)
+        except NotLoggedInError as exc:
+            if exc.code != "redirected_to_sign_in":
+                raise
+            logger.info("The /account load was redirected mid-flight; recovering")
+
+    async def wait_for_account(self) -> None:
+        """Let the SPA recover its own session until it is on ``/account``.
+
+        After a browser restart My3's sessionStorage is empty, so the /account
+        route guard sends the page to /customer-login, which runs a silent
+        Auth0 /authorize (persistent ``auth0`` cookie), lands on
+        /customer-logged and moves itself to /account (seen live,
+        2026-11-17). Fails fast only when a human is needed: the Auth0 form
+        is showing, or the page sits on a sign-in route.
+        """
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        on_sign_in_since: float | None = None
+        landing_since: float | None = None
+        account_since: float | None = None
+        retried = False
+        while True:
+            now = loop.time()
+            step = recovery_step(self.page.url, self.site)
+            # /account renders for a moment before its guard redirects, so it
+            # only counts once the page has stayed there.
+            account_since = (account_since or now) if step == "account" else None
+            if account_since and now - account_since >= ACCOUNT_STABLE_SECONDS:
+                return
+            if step == "auth_form":
+                raise NotLoggedInError(
+                    "My3 needs you to sign in again (the Auth0 form is showing). "
+                    "Run `three-bill login`.",
+                    code="sign_in_required",
+                )
+            on_sign_in_since = (
+                (on_sign_in_since or now) if step == "sign_in_route" else None
+            )
+            if (
+                on_sign_in_since
+                and now - on_sign_in_since > SIGN_IN_ROUTE_GRACE_SECONDS
+            ):
+                raise NotLoggedInError(
+                    f"My3 is not signed in ({auth_barrier(self.page.url, self.site)}). "
+                    "Run `three-bill login`.",
+                    code="redirected_to_sign_in",
+                )
+            landing_since = (landing_since or now) if step == "landing" else None
+            if (
+                landing_since
+                and not retried
+                and now - landing_since > LANDING_STALL_SECONDS
+            ):
+                # The SPA usually moves itself on; nudge it once if it stalls.
+                retried = True
+                landing_since = None
+                await self.goto_account()
+            if now - started > ACCOUNT_RECOVERY_TIMEOUT_SECONDS:
+                raise NotLoggedInError(
+                    "My3 did not reach /account. Run `three-bill login`.",
+                    code="not_on_account_page",
+                    path=contract.redact_url(self.page.url),
+                )
+            await asyncio.sleep(0.25)
+
     async def open_account(self) -> Account:
         """Load ``/account``, confirm the session, and learn the cuid.
 
@@ -294,24 +391,8 @@ class My3:
 
         page.on("response", collect)
         try:
-            await goto(page, self.site.account_url, self.site)
-            await asyncio.sleep(1.0)
-            # With a restored session the SPA bounces through Auth0 to refresh
-            # it (seen live, 2026-11-17). Only a redirect that stays off-site,
-            # or lands on a sign-in route, means signed out.
-            await nav.wait_off_barrier(
-                page,
-                lambda url: (
-                    "off-site" if contract.host_of(url) != self.site.host else None
-                ),
-                timeout=AUTH_BOUNCE_TIMEOUT_SECONDS,
-            )
-            if not auth_barrier(page.url, self.site) and not is_account_url(
-                page.url, self.site
-            ):
-                # The bounce can land on /customer-logged; ask for /account again.
-                await goto(page, self.site.account_url, self.site)
-                await asyncio.sleep(1.0)
+            await self.goto_account()
+            await self.wait_for_account()
             await self.check_authenticated()
 
             loop = asyncio.get_running_loop()
