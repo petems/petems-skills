@@ -343,6 +343,50 @@ describe('network', () => {
     assert.equal(section(b.events, 'network', { thread: 'all' }).rows.length, 2);
   });
 
+  it('keeps browser-process requests that share an id across frames apart', () => {
+    const b = new TraceBuilder().mainThread().threadName(1, 1, 'CrBrowserMain');
+    b.tracingStarted([{ frame: 'PAGE', processId: 100, isOutermostMainFrame: true }]);
+    b.x('RunTask', BASE, ms(1));
+    // Only the sends carry a frame; the browser's later events do not.
+    const send = (ts, frame, url, method) => b.instant('ResourceSendRequest', ts, { pid: 1, args: { data: { requestId: 'dup', url, requestMethod: method, frame } } });
+    send(BASE + ms(1), 'PAGE', 'https://page.test/doc', 'GET');
+    b.instant('ResourceReceiveResponse', BASE + ms(21), { args: { data: { requestId: 'dup', frame: 'PAGE', statusCode: 200, mimeType: 'text/html' } } });
+    b.instant('ResourceFinish', BASE + ms(41), { args: { data: { requestId: 'dup', encodedDataLength: 2048 } } });
+    send(BASE + ms(50), 'OTHER', 'https://other-tab.test/secret', 'POST');
+    b.instant('ResourceReceiveResponse', BASE + ms(60), { pid: 1, args: { data: { requestId: 'dup', statusCode: 500 } } });
+    b.instant('ResourceFinish', BASE + ms(90), { pid: 1, args: { data: { requestId: 'dup', encodedDataLength: 9999 } } });
+    const d = section(b.events, 'network');
+    assert.deepEqual(d.rows.map((r) => [r.url, r.method, r.ttfbMs, r.durMs, r.sizeKB, r.status]), [['https://page.test/doc', 'GET', 20, 40, 2, 200]]);
+    assert.ok(!render(analyze(b.events, { sections: ['network'] })).includes('other-tab.test'));
+    // The browser never closed the page's send, so its frameless response
+    // and finish could belong to either request: they are left unattributed
+    // rather than guessed.
+    const all = section(b.events, 'network', { thread: 'all' });
+    assert.deepEqual(all.rows.map((r) => [r.url, r.method, r.ttfbMs, r.durMs, r.status]), [
+      ['https://page.test/doc', 'GET', 20, 40, 200],
+      ['https://other-tab.test/secret', 'POST', null, null, null],
+    ]);
+  });
+
+  it('splits a browser request id reused in one frame, and never guesses frameless events', () => {
+    const b = new TraceBuilder().threadName(1, 1, 'CrBrowserMain');
+    b.x('RunTask', BASE, ms(1), { pid: 1 });
+    // Sequential reuse after a finish: two requests.
+    b.request({ requestId: 'seq', url: 'https://a.test/1', sendTs: BASE + ms(1), responseTs: BASE + ms(5), finishTs: BASE + ms(9), pid: 1, frame: 'F' });
+    b.request({ requestId: 'seq', url: 'https://a.test/2', sendTs: BASE + ms(20), responseTs: BASE + ms(30), finishTs: BASE + ms(40), status: 404, pid: 1, frame: 'F' });
+    // Two frames in flight at once: a frameless response could be either's.
+    b.instant('ResourceSendRequest', BASE + ms(50), { pid: 1, args: { data: { requestId: 'par', url: 'https://b.test/x', frame: 'F' } } });
+    b.instant('ResourceSendRequest', BASE + ms(51), { pid: 1, args: { data: { requestId: 'par', url: 'https://b.test/y', frame: 'G' } } });
+    b.instant('ResourceReceiveResponse', BASE + ms(60), { pid: 1, args: { data: { requestId: 'par', statusCode: 500 } } });
+    const all = section(b.events, 'network', { thread: 'all' });
+    assert.deepEqual(all.rows.map((r) => [r.url, r.ttfbMs, r.durMs, r.status]), [
+      ['https://a.test/1', 4, 8, 200],
+      ['https://a.test/2', 10, 20, 404],
+      ['https://b.test/x', null, null, null],
+      ['https://b.test/y', null, null, null],
+    ]);
+  });
+
   it('builds rollup, sizes, TTFB and truncates long URLs', () => {
     const long = 'https://cdn.example.com/' + 'a'.repeat(150) + '/end.js';
     const b = new TraceBuilder().mainThread();
@@ -389,6 +433,21 @@ describe('websocket', () => {
     assert.equal(d.events.length, 6);
     assert.equal(d.events[3].url, 'wss://b.test/s');
     assert.match(render(analyze(b.events, { sections: ['websocket'] })), /\| open \| 2 \|/);
+  });
+
+  it('bounds the connection table by --top', () => {
+    const b = new TraceBuilder().mainThread();
+    b.x('RunTask', BASE, 10);
+    for (let i = 0; i < 30; i++) b.websocket(i, `wss://s${i}.test/`, [['WebSocketCreate', BASE + ms(1 + i)]]);
+    const d = section(b.events, 'websocket', { top: 1 });
+    assert.deepEqual(d.connections.map((c) => c.url), ['wss://s0.test/']);
+    assert.equal(d.connectionsMore, 29);
+    assert.equal(d.events.length, 1);
+    assert.equal(d.more, 29);
+    const md = render(analyze(b.events, { sections: ['websocket'], top: 1 }));
+    assert.equal((md.match(/\| s\d+\.test\//g) || []).length, 2, 'one connection row and one event row');
+    assert.equal((md.match(/\.\.\.29 more/g) || []).length, 2);
+    assert.equal(JSON.parse(render(analyze(b.events, { sections: ['websocket'], top: 1 }), { format: 'json' })).sections.websocket.connectionsMore, 29);
   });
 });
 

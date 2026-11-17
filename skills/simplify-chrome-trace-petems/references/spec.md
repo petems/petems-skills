@@ -94,7 +94,12 @@ would blend unrelated work and URLs into one page's report.
 
 `--thread` overrides: a thread name (`DedicatedWorker thread`), a `pid:tid`,
 or `all` (aggregate every thread). The header states which thread(s) were
-used and how they were chosen.
+used and how they were chosen. A name is compared case-insensitively after
+the same text cleaning as stored thread names. Several matches in one
+process (a thread pool, one page's workers) are combined; matches in more
+than one process would combine tabs, so the tool exits with an error
+listing their `pid:tid` values and asks for `--thread pid:tid` (or
+`--thread all`).
 
 ## Duration model and self time
 
@@ -347,11 +352,19 @@ Requests reconstructed from `ResourceSendRequest`, `ResourceReceiveResponse`,
 Chrome request ids are only unique per process, so each renderer (a process
 with a `CrRendererMain` thread) gets its own record for an id; two tabs that
 reuse an id never merge. One request can still span processes (the browser
-may emit a navigation's send while the renderer emits its response), so
-events from a non-renderer process join the renderer record for that id
-whose `frame` matches, else the only renderer record for that id. With no
-renderer record for the id they share one record; when ambiguous they form
-their own record, owned by their process.
+may emit a navigation's send while the renderer emits its response).
+Browser and service processes carry every tab's traffic and often put a
+`frame` only on the send, so their events for an id are first split, in
+time order, into request instances: a framed event joins the open
+(unfinished) instance with that frame, a second send in an open instance is
+a redirect, a send after `ResourceFinish` starts a new instance, and a
+frameless event joins the only open instance. A frameless event that could
+belong to several open instances is left in a separate unattributed
+instance instead of being guessed. Each instance then joins the renderer
+record for that id whose `frame` matches, else the only renderer record for
+that id when either side has no frame; a renderer record takes at most one
+instance. Every other instance is its own record, owned by the process of
+its first event, so two requests never share a URL, method or timing.
 Captured: url, method, priority, offset, TTFB (response - send), duration
 (finish - send), encoded size (from finish `encodedDataLength`, else summed
 `ResourceReceivedData`), status, mimeType, `fromCache`/`fromServiceWorker`,
@@ -376,8 +389,9 @@ Events whose name starts with `WebSocket` (`WebSocketCreate`,
 `WebSocketSendHandshakeRequest`, `WebSocketReceiveHandshakeResponse`,
 `WebSocketDestroy`, plus any frame events), grouped by
 `args.data.identifier`. One table of connections: url, created offset,
-handshake ms, destroyed offset (or `open`), event count. Then the raw event
-timeline (offset, event, url), top N. Counts and rows are window-scoped,
+handshake ms, destroyed offset (or `open`), event count, top N (with a
+`...N more` line; `connectionsMore` in JSON). Then the raw event timeline
+(offset, event, url), top N. Counts and rows are window-scoped,
 but each connection's URL comes from the whole trace, since the
 `WebSocketCreate` that carries it may fall before the window.
 

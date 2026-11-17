@@ -101,7 +101,7 @@ instructions. Every report starts with a line saying so.
 | `--long-task-ms MS` | long-task threshold (default 50) |
 | `--window A-B` | scope to offsets A..B ms from trace start. `A-` and `-B` work, `breadcrumb` uses the saved DevTools selection |
 | `--bucket MS` | timeline bucket size (default 1000, minimum 1; widened automatically past 2,000 buckets) |
-| `--thread T` | thread to analyse: a name, `pid:tid`, or `all` (default: the page's main thread, auto-detected; if the trace holds several tabs, one is picked and a warning lists the others' pids) |
+| `--thread T` | thread to analyse: a name, `pid:tid`, or `all`. Default: the page's main thread (with several tabs, one is picked and a warning lists the other pids). A name found in several processes is an error listing `pid:tid` choices |
 | `--only a,b` / `--except a,b` / `--all` | choose sections |
 | `--match TEXT` | case-insensitive row filter (names, functions, URLs). `/regex/i` also works |
 | `--wall-clock` | add UTC columns, to line offsets up with server logs |

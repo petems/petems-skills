@@ -149,7 +149,21 @@ export function resolveThreads(model, opt) {
   const lower = cleanText(opt).toLowerCase();
   const hit = model.threads.filter((t) => t.name.toLowerCase() === lower);
   if (hit.length === 0) throw new UserError(`no thread named "${opt}" in trace. Threads: ${availableThreads(model)}`);
-  return { threads: withEventsFirst(hit), reason: `--thread "${opt}"`, all: false };
+  // Each renderer process is a tab (or an out-of-process iframe), so a name
+  // that matches threads in several processes would combine tabs. Refuse and
+  // list the candidates rather than guess. Several matches in one process
+  // (a thread pool, a page's workers) are one page and are combined.
+  const pids = new Set(hit.map((t) => t.pid));
+  if (pids.size > 1) {
+    const ids = [...hit].sort((a, b) => a.pid - b.pid || a.tid - b.tid).map((t) => `${t.pid}:${t.tid}`);
+    const shown = ids.length > 15 ? `${ids.slice(0, 15).join(', ')}, ...` : ids.join(', ');
+    throw new UserError(
+      `thread name "${cleanText(opt)}" matches threads in ${pids.size} processes (${shown}); choose one with --thread pid:tid, or use --thread all to combine everything.`,
+    );
+  }
+  const threads = withEventsFirst(hit);
+  const count = threads.length > 1 ? ` (${threads.length} threads in pid ${threads[0].pid})` : '';
+  return { threads, reason: `--thread "${opt}"${count}`, all: false };
 }
 
 function availableThreads(model) {

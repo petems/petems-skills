@@ -40,10 +40,11 @@ export function compute(ctx) {
   let conns = groupSockets(evs);
   for (const c of conns) if (!c.url) c.url = urlOf.get(`${c.pid}|${c.identifier}`) || '';
   if (ctx.matcher) conns = conns.filter((c) => ctx.matcher(c.url));
-  if (!conns.length) return { connections: [], events: [], more: 0, omitted, note: ['No WebSocket activity in scope.', omitted].filter(Boolean).join(' ') };
+  if (!conns.length) return { connections: [], connectionsMore: 0, events: [], more: 0, omitted, note: ['No WebSocket activity in scope.', omitted].filter(Boolean).join(' ') };
   const keep = new Set(conns.map((c) => `${c.pid}|${c.identifier}`));
   conns.sort((a, b) => (a.created ?? Infinity) - (b.created ?? Infinity) || byStr(String(a.identifier), String(b.identifier)));
-  const connections = conns.map((c) => ({
+  const ct = topN(conns, ctx.top);
+  const connections = ct.rows.map((c) => ({
     identifier: c.identifier,
     url: c.url,
     createdMs: c.created !== null ? round3(ctx.off(c.created)) : null,
@@ -55,7 +56,7 @@ export function compute(ctx) {
     .filter((e) => keep.has(`${e.pid}|${e.identifier}`))
     .map((e) => ({ ...offsetFields(ctx, e.ts), event: e.name, identifier: e.identifier, url: e.url || urlOf.get(`${e.pid}|${e.identifier}`) || '' }));
   const t = topN(rows, ctx.top);
-  return { connections, events: t.rows, more: t.more, omitted, hasUtc: !!ctx.utc };
+  return { connections, connectionsMore: ct.more, events: t.rows, more: t.more, omitted, hasUtc: !!ctx.utc };
 }
 
 export function md(d) {
@@ -69,5 +70,5 @@ export function md(d) {
     [...offsetHeaders(d.hasUtc), 'event', 'url'],
     d.events.map((e) => [...offsetCells(e, d.hasUtc), e.event, shortUrl(e.url)]),
   );
-  return [heading(title), t1, 'Events:', t2, moreLine(d.more), d.omitted].filter(Boolean).join('\n\n');
+  return [heading(title), t1, moreLine(d.connectionsMore), 'Events:', t2, moreLine(d.more), d.omitted].filter(Boolean).join('\n\n');
 }

@@ -220,4 +220,28 @@ describe('main thread detection', () => {
     assert.throws(() => resolveThreads(m, 'Nope'), UserError);
     assert.throws(() => resolveThreads(m, '1:999'), UserError);
   });
+
+  it('--thread by name refuses to combine matches from different processes (tabs)', () => {
+    const b = base();
+    b.threadName(200, 9, 'DedicatedWorker thread').x('W', BASE, 1, { pid: 200, tid: 9 });
+    b.threadName(300, 8, 'DedicatedWorker\nthread').x('W', BASE, 1, { pid: 300, tid: 8 });
+    const m = collectEvents(b.events);
+    // Both spellings clean to the same name, so the lookup must match both.
+    for (const name of ['DedicatedWorker thread', 'dedicatedworker THREAD']) {
+      assert.throws(
+        () => resolveThreads(m, name),
+        (err) => err instanceof UserError && /matches threads in 2 processes \(200:9, 300:8\)/.test(err.message) && /--thread pid:tid/.test(err.message) && !err.message.includes('\n'),
+      );
+    }
+    assert.deepEqual(resolveThreads(m, '300:8').threads.map((t) => `${t.pid}:${t.tid}`), ['300:8']);
+    assert.throws(() => resolveThreads(m, 'CrRendererMain'), /200:5, 300:7/);
+  });
+
+  it('--thread by name combines same-named threads within one process', () => {
+    const b = base();
+    for (const tid of [11, 12]) b.threadName(200, tid, 'ThreadPoolForegroundWorker').x('P', BASE, 1, { pid: 200, tid });
+    const r = resolveThreads(collectEvents(b.events), 'ThreadPoolForegroundWorker');
+    assert.deepEqual(r.threads.map((t) => `${t.pid}:${t.tid}`).sort(), ['200:11', '200:12']);
+    assert.match(r.reason, /2 threads in pid 200/);
+  });
 });

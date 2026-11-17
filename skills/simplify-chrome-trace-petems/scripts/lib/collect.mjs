@@ -309,51 +309,53 @@ export class TraceCollector {
   /**
    * Assemble request records. Each renderer's events for a request id form
    * their own record. Events from other processes (browser, network service)
-   * join the renderer record whose frame matches theirs, else the only
-   * renderer record for that id; with no renderer record they share one
-   * record (as before), and when ambiguous they stay a separate record.
+   * are first split into request instances (see nonRendererInstances), then
+   * each instance joins the renderer record for that id whose frame matches,
+   * else the only renderer record for that id when either side has no frame.
+   * A renderer record takes at most one instance; every other instance is a
+   * record of its own, so two requests' URL, method and timing never merge.
    */
   _buildNetwork(renderers) {
-    const groupKey = (e) => `${e.pid}|${e.requestId}`;
-    const groupFrame = new Map(); // pid|id -> first frame seen
     const byId = new Map(); // requestId -> Map(renderer pid -> first frame)
+    const others = new Map(); // requestId -> non-renderer events
     for (const e of this.network) {
-      const gk = groupKey(e);
-      if (e.frame && !groupFrame.has(gk)) groupFrame.set(gk, e.frame);
-    }
-    for (const e of this.network) {
-      if (!renderers.has(e.pid)) continue;
-      let m = byId.get(e.requestId);
-      if (m === undefined) byId.set(e.requestId, (m = new Map()));
-      if (!m.has(e.pid)) m.set(e.pid, groupFrame.get(groupKey(e)) || '');
-    }
-    const owner = new Map(); // pid|id -> record key (owning pid or 'shared')
-    const ownerOf = (e) => {
-      const gk = groupKey(e);
-      let o = owner.get(gk);
-      if (o !== undefined) return o;
-      const m = byId.get(e.requestId);
-      if (renderers.has(e.pid)) o = e.pid;
-      else if (!m) o = 'shared';
-      else {
-        const f = groupFrame.get(gk);
-        const hit = f ? [...m].find(([, rf]) => rf === f) : undefined;
-        if (hit) o = hit[0];
-        else if (m.size === 1) o = [...m.keys()][0];
-        else o = e.pid;
+      if (renderers.has(e.pid)) {
+        let m = byId.get(e.requestId);
+        if (m === undefined) byId.set(e.requestId, (m = new Map()));
+        if (!m.get(e.pid)) m.set(e.pid, e.frame);
+      } else {
+        let list = others.get(e.requestId);
+        if (list === undefined) others.set(e.requestId, (list = []));
+        list.push(e);
       }
-      owner.set(gk, o);
-      return o;
-    };
+    }
+    const ownerOf = new Map(); // non-renderer event -> { key, pid }
+    for (const [id, events] of others) {
+      const m = byId.get(id);
+      const claimed = new Set();
+      nonRendererInstances(events).forEach((inst, n) => {
+        let owner = { key: JSON.stringify(['own', inst.events[0].pid, id, n]), pid: inst.events[0].pid };
+        if (m && !inst.ambiguous) {
+          const free = [...m].filter(([p]) => !claimed.has(p));
+          let hit = inst.frame ? free.find(([, rf]) => rf === inst.frame) : undefined;
+          if (!hit && m.size === 1 && free.length === 1 && (!inst.frame || !free[0][1])) hit = free[0];
+          if (hit) {
+            claimed.add(hit[0]);
+            owner = { key: JSON.stringify(['renderer', hit[0], id]), pid: hit[0] };
+          }
+        }
+        for (const e of inst.events) ownerOf.set(e, owner);
+      });
+    }
     const records = new Map();
     for (const e of this.network) {
-      const o = ownerOf(e);
-      const key = `${o}|${e.requestId}`;
+      const owner = ownerOf.get(e) || { key: JSON.stringify(['renderer', e.pid, e.requestId]), pid: e.pid };
+      const key = owner.key;
       let r = records.get(key);
       if (r === undefined) {
         r = {
           requestId: e.requestId,
-          pid: o === 'shared' ? e.pid : o,
+          pid: owner.pid,
           frame: '',
           url: '',
           method: '',
@@ -501,6 +503,61 @@ export class TraceCollector {
       warnings,
     };
   }
+}
+
+/**
+ * Split one request id's browser/service-process events into request
+ * instances. Those processes carry every tab's traffic, an id can recur
+ * (another frame, or a later request), and often only ResourceSendRequest
+ * carries a `frame`. Events are taken in time order:
+ *
+ * - An event with a frame joins the open (unfinished) instance with that
+ *   frame, else the latest instance with that frame unless it is a new send,
+ *   else adopts the only open frameless instance, else starts an instance.
+ *   A second send in an open instance is a redirect, so it stays.
+ * - A frameless event joins the only open instance (or the only instance at
+ *   all). A frameless send with several open instances starts its own; any
+ *   other frameless event that could belong to several goes to a separate
+ *   `ambiguous` instance that never joins a renderer record.
+ * - ResourceFinish closes its instance, so a later send reusing the id in
+ *   the same frame is a new request.
+ *
+ * @param {any[]} events
+ * @returns {{frame:string, finished:boolean, ambiguous:boolean, events:any[]}[]}
+ */
+export function nonRendererInstances(events) {
+  const insts = [];
+  let ambiguous = null;
+  const start = (frame) => {
+    const inst = { frame, finished: false, ambiguous: false, events: [] };
+    insts.push(inst);
+    return inst;
+  };
+  const sorted = events.map((e, i) => [e, i]).sort((a, b) => a[0].ts - b[0].ts || a[1] - b[1]).map(([e]) => e);
+  for (const e of sorted) {
+    const isSend = e.name === 'ResourceSendRequest';
+    const open = insts.filter((x) => !x.finished);
+    let inst;
+    if (e.frame) {
+      inst = open.findLast((x) => x.frame === e.frame);
+      if (!inst && !isSend) inst = insts.findLast((x) => x.frame === e.frame);
+      if (!inst) {
+        const frameless = open.filter((x) => !x.frame);
+        if (frameless.length === 1) (inst = frameless[0]).frame = e.frame;
+      }
+      if (!inst) inst = start(e.frame);
+    } else if (open.length === 1) inst = open[0];
+    else if (isSend) inst = start('');
+    else if (open.length === 0 && insts.length <= 1) inst = insts[0] || start('');
+    else {
+      if (!ambiguous) ambiguous = { frame: '', finished: false, ambiguous: true, events: [] };
+      inst = ambiguous;
+    }
+    inst.events.push(e);
+    if (e.name === 'ResourceFinish' && !inst.ambiguous) inst.finished = true;
+  }
+  if (ambiguous) insts.push(ambiguous);
+  return insts;
 }
 
 /** Collect an in-memory array of events (tests, small inputs). */
