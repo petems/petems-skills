@@ -81,6 +81,8 @@ describe('streaming tokenizer', () => {
       ['[,{"ph":"X"}]', /unexpected ","/],
       ['{"traceEvents":[],}', /trailing comma in top-level object/],
       ['{"traceEvents":[] "metadata":{}}', /expected "," or "}"/],
+      ['{"traceEvents":[],"unused":}', /missing value in top-level object/],
+      ['{"unused":,"traceEvents":[]}', /missing value in top-level object/],
       ['[{"ph":"X"}]garbage', /unexpected data after the end/],
       ['{"traceEvents":[]}{}', /unexpected data after the end/],
     ];

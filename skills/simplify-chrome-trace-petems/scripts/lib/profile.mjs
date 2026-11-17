@@ -180,7 +180,13 @@ export function buildProfiles(rawProfiles) {
       node[j] = th.parts[pi].node[i];
     }
     // Keep each profile's own durations: recomputing across the merged
-    // timeline would hand the gap between two recordings to one sample.
+    // timeline would hand the gap between two recordings to one sample. But
+    // never let a sample run past the next one (a profile's inferred last
+    // interval can reach into the next profile), or that time counts twice.
+    for (let j = 0; j + 1 < total; j++) {
+      const room = times[j + 1] - times[j];
+      if (durs[j] > room) durs[j] = room;
+    }
     threads.set(key, { key, pid: th.pid, tid: th.tid, times, durs, node });
   }
   return { frames, nodes, threads };

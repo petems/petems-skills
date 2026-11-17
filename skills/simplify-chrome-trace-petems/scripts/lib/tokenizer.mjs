@@ -234,6 +234,8 @@ export class TraceTokenizer {
           break;
         case OBJ_VALUE_WAIT:
           if (isWs(c)) break;
+          // `}`, `,` or `]` here would be an empty member value.
+          if (c === 125 || c === 44 || c === 93) throw new UserError('not JSON (missing value in top-level object)');
           if (this.key === 'traceEvents' && c === 91 && !this.foundEvents) {
             this.foundEvents = true;
             this.eventsInObject = true;

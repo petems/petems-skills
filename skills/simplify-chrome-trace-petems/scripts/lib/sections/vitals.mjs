@@ -52,7 +52,9 @@ export function compute(ctx) {
   // it. Preferring a later FCP could jump to a second page and silently drop
   // the first page's earlier metrics.
   const METRICS = new Set(['firstContentfulPaint', 'largestContentfulPaint::Candidate', 'MarkDOMContent', 'MarkLoad', 'LayoutShift']);
-  const anchor = evs.find((v) => METRICS.has(v.name));
+  // A shift with recent input is discarded from CLS below, so it must not
+  // pick the navigation either.
+  const anchor = evs.find((v) => METRICS.has(v.name) && !(v.name === 'LayoutShift' && v.hadRecentInput));
   let nav = null;
   if (anchor) {
     const before = allNavs.filter((n) => n.ts <= anchor.ts);

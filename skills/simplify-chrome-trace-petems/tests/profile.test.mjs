@@ -176,6 +176,20 @@ describe('CPU profile', () => {
     assert.equal(a.sampled, 4000, 'two 2-sample profiles at 1 ms intervals');
   });
 
+  it('a profile\'s inferred last interval never runs into the next profile', () => {
+    // [0, 1000] then [1500, 1600] (us from BASE): the first profile's last
+    // sample would infer 1000 us and overlap the second recording.
+    const b = new TraceBuilder().mainThread();
+    b.x('RunTask', BASE, 10_000_000);
+    b.profile({ nodes: NODES, samples: [5, 5], deltas: [0, 1000] });
+    b.profile({ id: '0x9', startTime: BASE + 1500, nodes: NODES, samples: [5, 5], deltas: [0, 100] });
+    const p = buildProfiles(collectEvents(b.events).profiles);
+    const th = [...p.threads.values()][0];
+    const a = aggregateSamples(p, th, BASE + 1500, BASE + 1700);
+    assert.equal(a.sampled, 200, 'no more than the 200 us window');
+    assert.equal(aggregateSamples(p, th, -Infinity, Infinity).sampled, 1700);
+  });
+
   it('reports idle, program and GC separately and excludes synthetic frames', () => {
     const { p } = prof({ samples: [3, 2, 8, 5], deltas: [0, 10, 10, 10] });
     const th = [...p.threads.values()][0];

@@ -432,6 +432,21 @@ describe('network', () => {
     assert.equal(section(b.events, 'network', { thread: 'all' }).rows.length, 4);
   });
 
+  it('--thread on another tab\'s renderer does not inherit the default tab\'s frames', () => {
+    const b = new TraceBuilder().mainThread(200, 7).mainThread(300, 7).threadName(1, 1, 'CrBrowserMain');
+    b.tracingStarted([
+      { frame: 'TAB1', processId: 200, isOutermostMainFrame: true },
+      { frame: 'TAB2', processId: 300, isOutermostMainFrame: true },
+    ]);
+    b.x('RunTask', BASE, ms(1), { pid: 200, tid: 7 });
+    b.x('RunTask', BASE, ms(1), { pid: 300, tid: 7 });
+    b.request({ requestId: 'a', url: 'https://tab1.test/via-browser', sendTs: BASE + ms(1), pid: 1, frame: 'TAB1' });
+    b.request({ requestId: 'b', url: 'https://tab2.test/own', sendTs: BASE + ms(2), pid: 300, tid: 7, frame: 'TAB2' });
+    b.request({ requestId: 'c', url: 'https://tab2.test/via-browser', sendTs: BASE + ms(3), pid: 1, frame: 'TAB2' });
+    const d = section(b.events, 'network', { thread: '300:7' });
+    assert.deepEqual(d.rows.map((r) => r.url), ['https://tab2.test/own', 'https://tab2.test/via-browser']);
+  });
+
   it('with a known frame tree, keeps frameless and late-iframe requests unless the process hosts other frames', () => {
     const b = new TraceBuilder().mainThread();
     b.tracingStarted([{ frame: 'PAGE', processId: 100, isOutermostMainFrame: true }]);
@@ -576,6 +591,19 @@ describe('vitals', () => {
     b.instant('LayoutShift', BASE + ms(1150), { args: { frame: 'F1', data: { score: 0.01, had_recent_input: false } } });
     return section(b.events, 'vitals');
   };
+
+  it('a layout shift with recent input does not choose the navigation', () => {
+    const b = new TraceBuilder().mainThread();
+    const nav = (t) => b.instant('navigationStart', BASE + ms(t), { cat: 'blink.user_timing', args: { frame: 'F1', data: { documentLoaderURL: `https://a.test/${t}`, isLoadingMainFrame: true } } });
+    nav(0);
+    b.instant('LayoutShift', BASE + ms(100), { args: { frame: 'F1', data: { score: 0.2, had_recent_input: true } } });
+    nav(1000);
+    b.instant('firstContentfulPaint', BASE + ms(1100), { cat: 'loading', args: { frame: 'F1' } });
+    const d = section(b.events, 'vitals', { window: '50-2000' });
+    const fcp = d.rows.find((r) => r.metric === 'First Contentful Paint');
+    assert.ok(fcp, 'FCP of the second navigation is reported');
+    assert.equal(fcp.sinceNavMs, 100);
+  });
 
   it('keeps every metric within the chosen navigation', () => {
     const d = twoNavs(true); // first navigation is chosen (precedes the first paint)
