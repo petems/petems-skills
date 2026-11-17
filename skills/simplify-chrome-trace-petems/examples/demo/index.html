@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>simplify-chrome-trace demo</title>
+  <style>
+    body { font: 14px system-ui, sans-serif; margin: 2rem; }
+    #grid { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 1rem; }
+    .box { width: 24px; height: 24px; background: #8ab; }
+    #ticker { margin-top: 1rem; color: #567; }
+  </style>
+</head>
+<body>
+  <h1>Deliberately slow demo page</h1>
+  <p>Each problem below is intentional so the example trace has something to find.</p>
+  <button id="thrash">Resize boxes (layout thrashing)</button>
+  <button id="crunch">Crunch numbers (fast, for contrast)</button>
+  <div id="ticker">ticks: 0</div>
+  <div id="grid"></div>
+
+  <script>
+    // Problem 1: a long task during start-up (blocking "config parsing").
+    performance.mark('demo:boot-start');
+    function parseConfig() {
+      const end = performance.now() + 180;
+      let acc = 0;
+      while (performance.now() < end) acc += Math.sqrt(acc + 1);
+      return acc;
+    }
+    parseConfig();
+    performance.mark('demo:boot-end');
+    performance.measure('demo:boot', 'demo:boot-start', 'demo:boot-end');
+
+    const grid = document.getElementById('grid');
+    for (let i = 0; i < 400; i++) {
+      const d = document.createElement('div');
+      d.className = 'box';
+      grid.appendChild(d);
+    }
+
+    // Problem 2: layout thrashing. Each iteration writes a style and then
+    // reads layout, forcing a synchronous style recalc + layout every time.
+    function resizeBoxes() {
+      performance.mark('demo:thrash-start');
+      console.timeStamp('demo: resize clicked');
+      const boxes = grid.querySelectorAll('.box');
+      for (let round = 0; round < 6; round++) {
+        for (const box of boxes) {
+          box.style.width = (20 + ((round + box.offsetTop) % 12)) + 'px';
+        }
+      }
+      performance.mark('demo:thrash-end');
+      performance.measure('demo:thrash', 'demo:thrash-start', 'demo:thrash-end');
+    }
+    document.getElementById('thrash').addEventListener('click', resizeBoxes);
+
+    // Contrast: a JS-only click handler that is fast, so a short interaction.
+    function crunchNumbers() {
+      const primes = [];
+      for (let n = 2; primes.length < 9000; n++) {
+        let isPrime = true;
+        for (let p = 2; p * p <= n; p++) if (n % p === 0) { isPrime = false; break; }
+        if (isPrime) primes.push(n);
+      }
+      return primes.length;
+    }
+    document.getElementById('crunch').addEventListener('click', crunchNumbers);
+
+    // Problem 4: work that happens too often. A timer and an animation loop
+    // that update the DOM every frame even though nothing meaningful changes.
+    let ticks = 0;
+    const ticker = document.getElementById('ticker');
+    setInterval(() => { ticks++; ticker.textContent = 'ticks: ' + ticks; }, 16);
+    function spin() {
+      grid.firstChild.style.opacity = String(0.5 + (performance.now() % 1000) / 2000);
+      requestAnimationFrame(spin);
+    }
+    requestAnimationFrame(spin);
+
+    // Network: a couple of local requests, one deliberately slow.
+    fetch('data.json').then((r) => r.json());
+    fetch('slow.json').then((r) => r.json());
+  </script>
+</body>
+</html>

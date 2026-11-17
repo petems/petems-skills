@@ -1,6 +1,6 @@
 [
-  {"query": "here's a performance trace from devtools, Trace-20261117T182954.json, what's making the page slow?", "should_trigger": true},
-  {"query": "I recorded the Performance panel while opening the menu, can you tell me why it janks? ~/Desktop/Trace-20261117.json.gz", "should_trigger": true},
+  {"query": "here's a performance trace from devtools, Trace-20250301T101500.json, what's making the page slow?", "should_trigger": true},
+  {"query": "I recorded the Performance panel while opening the menu, can you tell me why it janks? ~/Desktop/Trace-20250301.json.gz", "should_trigger": true},
   {"query": "find the long tasks in this chrome trace", "should_trigger": true},
   {"query": "which JS functions are hottest in trace.json? it's 300MB so don't open it directly", "should_trigger": true},
   {"query": "this trace has traceEvents and a cpu profile, what runs too often?", "should_trigger": true},
