@@ -16,7 +16,8 @@ allowed-tools:
 When the user asks to download a bill from Three.co.uk, follow these steps.
 
 The work is done by `three-bill`, a small Python CLI in this skill's
-`three-bill/` directory. It drives its own Patchright Chromium on a dedicated
+`three-bill/` directory, built on the repo's shared `skill-browser` package
+(profile lease, human login, exit codes). It drives its own Patchright Chromium on a dedicated
 profile (`~/.three-bill/profile`), loads My3's `/account` page, and calls the
 `/rp-server-b2c/` JSON API directly: seed, list bills, then the PDF. All of the
 API shape checks (the `customer.financialAccount[0].id` billing arrangement,
@@ -127,6 +128,10 @@ code:
 - **8, browser shutdown unconfirmed.** The bill may well have been saved (stdout
   will say so), but a Chromium may still be running on the profile. Ask the user
   to check and quit it before the next run.
+- **10, output exists.** A file with the same name is already at the save
+  location (`details.path`). Nothing was overwritten. Ask the user whether to
+  overwrite it or skip. Re-run with `--overwrite` only if they say so. Never
+  report the existing file as a new download.
 
 To see what bills exist without downloading, `three-bill list` prints
 `{"bills": [{month, year, billNumber, billAmount, billCloseDate, billStartDate,
@@ -193,9 +198,10 @@ The CLI names the file; do not rename it.
 | 5 | `invalid_identifier` | An id from Three was not digit-only, so no URL was built from it. Report with diagnostics |
 | 6 | `bill_not_found` | Show `details.available` and ask the user to pick a month |
 | 7 | `pdf_content_type:text/html`, `pdf_status:<n>` | Usually an auth redirect. Ask the user to re-login and retry once; otherwise report with diagnostics |
-| 7 | `pdf_not_pdf`, `pdf_too_small`, `pdf_too_large` | Not a plausible bill (expected 0.5 to 2 MB). Nothing was saved. Report with diagnostics |
+| 7 | `pdf_not_pdf`, `pdf_too_small`, `pdf_too_large` | Not a plausible bill (expected 0.5 to 3 MB; a live bill was 2.6 MB). Nothing was saved. Report with diagnostics |
 | 8 | `browser_shutdown_unconfirmed` | Chromium may still be running on `~/.three-bill/profile`. Ask the user to quit it before the next run |
 | 9 | `seed_failed`, `list_failed` | Three returned 404 or 5xx. The API may have moved. Report with diagnostics |
 | 9 | `navigation_failed`, `navigation_timeout`, `fetch_*` | Network problem reaching `www.three.co.uk`. Retry once, then report |
 | 9 | `browser_closed` | The browser window was closed mid-run. Retry and leave the window alone |
+| 10 | `output_exists` | Ask the user: overwrite (re-run with `--overwrite`) or skip |
 | n/a | PDF verification mismatch (month/amount/account) | Warn user with specifics, keep the file |

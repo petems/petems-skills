@@ -1,0 +1,16 @@
+# Virtual uv workspace root (no package of its own).
+#
+# Each skill CLI depends on skill-browser by git URL, pinned to a
+# skill-browser-v* tag, so a skill copied on its own still installs. Inside
+# this repo the source below overrides that URL with the local editable copy,
+# so changes to packages/skill-browser are picked up without a release.
+[tool.uv.workspace]
+members = [
+    "packages/skill-browser",
+    "skills/three-phone-bill-download-petems/three-bill",
+    "skills/hyperoptic-bill-download-petems/hyperoptic-bill",
+    "skills/peloton-invoice-download-petems/peloton-invoice",
+]
+
+[tool.uv.sources]
+skill-browser = { workspace = true }

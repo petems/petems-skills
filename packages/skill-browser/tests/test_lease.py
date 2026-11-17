@@ -12,20 +12,20 @@ from typing import ClassVar
 
 import pytest
 
-from three_bill import browser as browser_mod
-from three_bill.browser import BrowserManager, open_profile
-from three_bill.errors import (
+from skill_browser import browser as browser_mod
+from skill_browser.browser import BrowserManager, open_profile
+from skill_browser.errors import (
     NotLoggedInError,
     ProfileBusyError,
     ShutdownUnconfirmedError,
 )
-from three_bill.lease import ProfileLease, chromium_owner_pid
+from skill_browser.lease import ProfileLease, chromium_owner_pid
 
 _PROBE = """
 import sys
 from typing import ClassVar
 from pathlib import Path
-from three_bill.lease import ProfileLease
+from skill_browser.lease import ProfileLease
 lease = ProfileLease(Path(sys.argv[1]))
 print("acquired" if lease.try_acquire() else "busy")
 """
@@ -94,14 +94,18 @@ async def test_open_profile_reports_busy(profile):
     assert holder.try_acquire()
     try:
         with pytest.raises(ProfileBusyError):
-            async with open_profile(profile, headless=True, factory=factory()):
+            async with open_profile(
+                profile, tool="demo", headless=True, factory=factory()
+            ):
                 pass
     finally:
         holder.release()
 
 
 async def test_confirmed_close_releases(profile):
-    async with open_profile(profile, headless=True, factory=factory(confirm=True)) as b:
+    async with open_profile(
+        profile, tool="demo", headless=True, factory=factory(confirm=True)
+    ) as b:
         assert b.started
         assert not other_process_can_lock(ProfileLease.for_profile(profile).path)
     assert other_process_can_lock(ProfileLease.for_profile(profile).path)
@@ -109,7 +113,9 @@ async def test_confirmed_close_releases(profile):
 
 async def test_unconfirmed_close_keeps_the_lock(profile):
     with pytest.raises(ShutdownUnconfirmedError):
-        async with open_profile(profile, headless=True, factory=factory(confirm=False)):
+        async with open_profile(
+            profile, tool="demo", headless=True, factory=factory(confirm=False)
+        ):
             pass
     # Still ours until this process exits.
     assert not other_process_can_lock(ProfileLease.for_profile(profile).path)
@@ -117,14 +123,18 @@ async def test_unconfirmed_close_keeps_the_lock(profile):
 
 async def test_unconfirmed_close_does_not_mask_the_real_error(profile):
     with pytest.raises(NotLoggedInError):
-        async with open_profile(profile, headless=True, factory=factory(confirm=False)):
+        async with open_profile(
+            profile, tool="demo", headless=True, factory=factory(confirm=False)
+        ):
             raise NotLoggedInError("dead session")
     assert not other_process_can_lock(ProfileLease.for_profile(profile).path)
 
 
 async def test_error_inside_still_closes_and_releases(profile):
     with pytest.raises(NotLoggedInError):
-        async with open_profile(profile, headless=True, factory=factory(confirm=True)):
+        async with open_profile(
+            profile, tool="demo", headless=True, factory=factory(confirm=True)
+        ):
             raise NotLoggedInError("dead session")
     assert FakeBrowser.instances[-1].closed == 1
     assert other_process_can_lock(ProfileLease.for_profile(profile).path)
@@ -134,7 +144,9 @@ async def test_cancelled_run_still_settles(profile):
     entered = asyncio.Event()
 
     async def run():
-        async with open_profile(profile, headless=True, factory=factory(confirm=True)):
+        async with open_profile(
+            profile, tool="demo", headless=True, factory=factory(confirm=True)
+        ):
             entered.set()
             await asyncio.sleep(60)
 
@@ -149,16 +161,18 @@ async def test_cancelled_run_still_settles(profile):
 
 async def test_missing_profile_means_login(tmp_path):
     with pytest.raises(NotLoggedInError) as info:
-        async with open_profile(tmp_path / "nope", headless=True, factory=factory()):
+        async with open_profile(
+            tmp_path / "nope", tool="demo", headless=True, factory=factory()
+        ):
             pass
-    assert "three-bill login" in str(info.value)
+    assert "demo login" in str(info.value)
 
 
 async def test_stray_chromium_is_busy(profile):
     os.symlink(f"{socket.gethostname()}-{os.getpid()}", profile / "SingletonLock")
     assert chromium_owner_pid(profile) == os.getpid()
     with pytest.raises(ProfileBusyError) as info:
-        async with open_profile(profile, headless=True, factory=factory()):
+        async with open_profile(profile, tool="demo", headless=True, factory=factory()):
             pass
     assert info.value.code == "profile_busy_stray_chromium"
     # Refused without taking the profile, and without deleting Chromium's lock.

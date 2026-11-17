@@ -1,12 +1,14 @@
 [project]
 name = "three-bill"
-version = "0.1.0"
+version = "0.2.0"
 description = "Download Three UK bill PDFs through the My3 JSON API, driving a dedicated Patchright Chromium profile."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
-    "patchright>=1.55.0",
+    # Shared browser plumbing. Inside the repo, the workspace root overrides
+    # this with the local packages/skill-browser (see ../../../pyproject.toml).
+    "skill-browser @ git+https://github.com/petems/petems-skills@skill-browser-v0.1.0#subdirectory=packages/skill-browser",
 ]
 
 [project.scripts]

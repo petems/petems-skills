@@ -16,30 +16,16 @@ import re
 from typing import Any
 from urllib.parse import urlsplit
 
-from three_bill.errors import (
-    BillNotFoundError,
+from skill_browser.errors import (
     ContractChangedError,
     InvalidIdentifierError,
+    NotFoundError,
     NotLoggedInError,
 )
+from skill_browser.months import MONTHS
 
 BASE_URL = "https://www.three.co.uk"
 API_PREFIX = "/rp-server-b2c"
-
-MONTHS = (
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-)
 
 _DIGITS = re.compile(r"^\d+$")
 
@@ -335,25 +321,12 @@ def parse_bills(body: Any) -> list[Bill]:
 # -- choosing a bill ---------------------------------------------------------
 
 
-def parse_month(value: str) -> str:
-    """``March``, ``mar`` or ``3`` → ``March``."""
-    text = value.strip()
-    if _DIGITS.match(text):
-        number = int(text)
-        if 1 <= number <= 12:
-            return MONTHS[number - 1]
-    else:
-        lowered = text.lower()
-        for name in MONTHS:
-            if len(lowered) >= 3 and name.lower().startswith(lowered):
-                return name
-    raise ValueError(f"not a month: {value!r}")
-
-
 def select_bill(bills: list[Bill], month: str | None, year: int | None) -> Bill:
     """The newest bill, or the one issued in *month* / *year*."""
     if not bills:
-        raise BillNotFoundError("Three returned no bills", available=[])
+        raise NotFoundError(
+            "Three returned no bills", code="bill_not_found", available=[]
+        )
     if month is None and year is None:
         return bills[0]
     for bill in bills:
@@ -361,8 +334,9 @@ def select_bill(bills: list[Bill], month: str | None, year: int | None) -> Bill:
             year is None or bill.year == year
         ):
             return bill
-    raise BillNotFoundError(
+    raise NotFoundError(
         f"No bill issued in {month or ''} {year or ''}".strip(),
+        code="bill_not_found",
         requested={"month": month, "year": year},
         available=[{"month": b.month, "year": b.year} for b in bills],
     )
@@ -428,8 +402,6 @@ def pdf_path(cuid: str, bill_id: str, bill_number: str) -> str:
 
 # -- redaction ---------------------------------------------------------------
 
-_SENSITIVE_HEADER = re.compile(r"auth|cookie|token|session|secret|key", re.I)
-
 
 def redact_url(url: str) -> str:
     """Path only, with identifiers replaced. Query and fragment are dropped."""
@@ -437,13 +409,6 @@ def redact_url(url: str) -> str:
     path = re.sub(r"/customer/\d+", "/customer/<cuid>", path)
     path = re.sub(r"/billing-arrangement/\d+", "/billing-arrangement/<billId>", path)
     return re.sub(r"\d{6,}", "<id>", path)
-
-
-def redact_headers(headers: dict[str, str] | None) -> dict[str, str]:
-    return {
-        name: ("<redacted>" if _SENSITIVE_HEADER.search(name) else value)
-        for name, value in (headers or {}).items()
-    }
 
 
 def host_of(url: str) -> str:

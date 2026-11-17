@@ -5,9 +5,11 @@ API. It drives its own [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patc
 Chromium on a dedicated profile (`~/.three-bill/profile`), never your everyday
 Chrome and never a `--remote-debugging-port` instance.
 
-The browser layer follows `ramp-mcp-server`: one browser per profile, enforced
-by an `flock` on `~/.three-bill/profile.lock`, and the lock is released only
-once Chromium is confirmed to have exited.
+The browser layer (profile lease, human login loop, exit codes, diagnostics,
+atomic writes) is the shared [`skill-browser`](../../../packages/skill-browser)
+package: one browser per profile, enforced by an `flock` on
+`~/.three-bill/profile.lock`, released only once Chromium is confirmed to have
+exited. This package holds only the My3-specific parts (`contract.py`, `my3.py`).
 
 ## Install
 
@@ -44,7 +46,8 @@ password. `list` and `download` open a window too; pass `--headless` (or set
 live site.
 
 `download` writes `Three_UK_Bill_<Month>_<Year>[_GBP<amount>].pdf` (mode 0600,
-atomically) and prints `{path, bytes, month, year, billNumber, billAmount,
+atomically; it refuses to replace an existing file unless given `--overwrite`)
+and prints `{path, bytes, month, year, billNumber, billAmount,
 billCloseDate, billEndDate, cuid, warnings}`.
 
 ## Exit codes
@@ -60,6 +63,7 @@ billCloseDate, billEndDate, cuid, warnings}`.
 | 7 | `pdf_status:<n>`, `pdf_content_type:<type>`, `pdf_not_pdf`, `pdf_too_small`, `pdf_too_large` | The PDF response was not a plausible bill |
 | 8 | `browser_shutdown_unconfirmed` | Chromium may still be running on the profile |
 | 9 | `seed_failed`, `list_failed`, `navigation_failed`, `navigation_timeout`, ... | Three answered with an unexpected status, or the network failed |
+| 10 | `output_exists` | The output file exists; re-run with `--overwrite` to replace it |
 
 Errors are JSON on stderr. For exit codes 5, 7 and 9 a screenshot and a
 redacted request log (paths with ids replaced, status codes, redacted headers,
@@ -68,12 +72,11 @@ no bodies) are written under `~/.three-bill/diagnostics/` and listed in
 
 ## Develop
 
-```bash
-uv sync --group dev
-```
+From the repo root (a uv workspace, so the local `packages/skill-browser` is
+used instead of the pinned git tag):
 
 ```bash
-uv run pytest -m 'not browser'
+uv run --package three-bill --group dev pytest skills/three-phone-bill-download-petems/three-bill
 ```
 
 The `browser` tests run a real Chromium against a local fake of the My3 API.

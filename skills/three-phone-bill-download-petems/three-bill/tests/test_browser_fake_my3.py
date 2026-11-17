@@ -18,10 +18,10 @@ import threading
 import time
 
 import pytest
+from skill_browser.browser import open_profile
+from skill_browser.errors import NotLoggedInError
 
 from three_bill import my3 as my3_mod
-from three_bill.browser import open_profile
-from three_bill.errors import NotLoggedInError
 from three_bill.my3 import My3, Site
 
 pytestmark = pytest.mark.browser
@@ -169,6 +169,7 @@ def _chrome() -> str | None:
 async def _open(tmp_path, site, *, signed_in=True):
     cm = open_profile(
         tmp_path / "profile",
+        tool="three-bill",
         headless=True,
         executable_path=_chrome(),
         require_existing=False,

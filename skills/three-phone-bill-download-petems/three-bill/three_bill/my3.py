@@ -16,29 +16,33 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from dataclasses import dataclass, field
-import json
+from dataclasses import dataclass
 import logging
-from pathlib import Path
-import re
 import time
 from typing import Any
 from urllib.parse import urlsplit
 
-from three_bill import contract
-from three_bill.contract import Bill
-from three_bill.errors import (
+from skill_browser import nav
+from skill_browser import pdf as pdf_checks
+from skill_browser.diagnostics import NetworkLog
+from skill_browser.errors import (
     ApiError,
     ContractChangedError,
     NotLoggedInError,
     PdfInvalidError,
-    ThreeBillError,
+    SkillError,
 )
+
+from three_bill import contract
+from three_bill.contract import Bill
 
 logger = logging.getLogger(__name__)
 
+TOOL_NAME = "three-bill"
+
 NAV_TIMEOUT_MS = 30_000
 SEED_CAPTURE_TIMEOUT_SECONDS = 30.0
+AUTH_BOUNCE_TIMEOUT_SECONDS = 20.0
 API_TIMEOUT_MS = 30_000
 PDF_TIMEOUT_MS = 60_000
 PDF_MIN_BYTES = 100_000
@@ -94,101 +98,30 @@ def is_account_url(url: str, site: Site) -> bool:
 def validate_pdf(
     status: int, content_type: str, body: bytes | None, *, size: int | None = None
 ) -> None:
-    """Raise unless this is a plausible Three bill PDF."""
-    if status != 200:
-        raise PdfInvalidError(
-            f"PDF request returned HTTP {status}", code=f"pdf_status:{status}"
-        )
-    media = (content_type or "").split(";")[0].strip().lower()
-    if not media.startswith("application/pdf"):
-        # text/html here is almost always an auth redirect.
-        raise PdfInvalidError(
-            f"PDF request returned {media or 'no content type'}",
-            code=f"pdf_content_type:{media or 'none'}",
-        )
-    length = len(body) if body is not None else (size or 0)
-    if length > PDF_MAX_BYTES:
-        raise PdfInvalidError(
-            f"PDF is {length} bytes, over the cap", code="pdf_too_large", bytes=length
-        )
-    if body is None or not body.startswith(b"%PDF-"):
-        raise PdfInvalidError("Response does not start with %PDF-", code="pdf_not_pdf")
-    if length < PDF_MIN_BYTES:
-        raise PdfInvalidError(
-            f"PDF is only {length} bytes; a Three bill is usually 0.5-2 MB",
-            code="pdf_too_small",
-            bytes=length,
-        )
+    """Raise unless this is a plausible Three bill PDF (usually 0.5 to 3 MB)."""
+    pdf_checks.validate_pdf(
+        status,
+        content_type,
+        body,
+        size=size,
+        min_bytes=PDF_MIN_BYTES,
+        max_bytes=PDF_MAX_BYTES,
+    )
 
 
 async def goto(page: Any, url: str, site: Site) -> None:
-    """Navigate, turning any failure into a typed error that names no URL.
-
-    A sign-in redirect left behind by a failed or timed-out navigation is real
-    evidence about the session and outranks the network error.
-    """
-    from patchright.async_api import Error as PlaywrightError
-    from patchright.async_api import TimeoutError as PlaywrightTimeoutError
-
-    try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
-    except PlaywrightError as exc:
-        barrier = auth_barrier(page.url, site)
-        if barrier and not page.url.startswith("about:"):
-            raise NotLoggedInError(
-                f"My3 is not signed in ({barrier}). Run `three-bill login`.",
-                code="redirected_to_sign_in",
-            ) from exc
-        if isinstance(exc, PlaywrightTimeoutError):
-            raise ApiError(
-                f"Timed out loading {contract.redact_url(url)}",
-                code="navigation_timeout",
-            ) from exc
-        net = re.search(r"net::[A-Z_]+", str(exc))
-        raise ApiError(
-            f"Could not load {contract.redact_url(url)} "
-            f"({net.group(0) if net else type(exc).__name__}). Check the network.",
-            code="navigation_failed",
-        ) from exc
+    await nav.goto(
+        page,
+        url,
+        tool=TOOL_NAME,
+        barrier=lambda current: auth_barrier(current, site),
+        redact=contract.redact_url,
+        timeout_ms=NAV_TIMEOUT_MS,
+    )
 
 
-@dataclass
-class NetworkLog:
-    """A redacted record of the My3 API traffic, for diagnostics only."""
-
-    entries: list[dict[str, Any]] = field(default_factory=list)
-
-    def add(
-        self,
-        method: str,
-        url: str,
-        status: int,
-        headers: dict[str, str] | None,
-        via: str,
-    ) -> None:
-        if contract.API_PREFIX not in urlsplit(url).path:
-            return
-        self.entries.append(
-            {
-                "via": via,
-                "method": method,
-                "path": contract.redact_url(url),
-                "status": status,
-                "headers": contract.redact_headers(headers),
-            }
-        )
-
-    def on_response(self, response: Any) -> None:
-        try:
-            self.add(
-                response.request.method,
-                response.url,
-                response.status,
-                response.headers,
-                "page",
-            )
-        except Exception:  # a listener must never raise
-            pass
+def is_api_url(url: str) -> bool:
+    return contract.API_PREFIX in urlsplit(url).path
 
 
 _FETCH_JSON = """
@@ -261,7 +194,7 @@ class My3:
     def __init__(self, browser: Any, site: Site | None = None) -> None:
         self.browser = browser
         self.site = site or Site()
-        self.network = NetworkLog()
+        self.network = NetworkLog(match=is_api_url, redact=contract.redact_url)
         self._listening = False
 
     @property
@@ -305,7 +238,7 @@ class My3:
                 )
             try:
                 result = await self.fetch_json(contract.auth_check_path())
-            except ThreeBillError:
+            except SkillError:
                 raise
             except Exception as exc:  # execution context destroyed mid-navigation
                 last = exc
@@ -326,29 +259,6 @@ class My3:
             "Could not run the My3 auth check; the page kept navigating.",
             code="auth_check_unreachable",
         ) from last
-
-    async def wait_while_loading(
-        self, timeout: float = 15.0, stable_polls: int = 3
-    ) -> None:
-        """Until body text length stops changing. Text *length*, never text."""
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        last, stable = -1, 0
-        while loop.time() < deadline:
-            try:
-                length = await self.page.evaluate(
-                    "() => (document.body && document.body.innerText || '').length"
-                )
-            except Exception:
-                length = 0
-            if isinstance(length, int) and length > 0 and length == last:
-                stable += 1
-                if stable >= stable_polls:
-                    return
-            else:
-                stable = 0
-            last = length if isinstance(length, int) else -1
-            await asyncio.sleep(0.5)
 
     async def open_account(self) -> Account:
         """Load ``/account``, confirm the session, and learn the cuid.
@@ -386,6 +296,22 @@ class My3:
         try:
             await goto(page, self.site.account_url, self.site)
             await asyncio.sleep(1.0)
+            # With a restored session the SPA bounces through Auth0 to refresh
+            # it (seen live, 2026-11-17). Only a redirect that stays off-site,
+            # or lands on a sign-in route, means signed out.
+            await nav.wait_off_barrier(
+                page,
+                lambda url: (
+                    "off-site" if contract.host_of(url) != self.site.host else None
+                ),
+                timeout=AUTH_BOUNCE_TIMEOUT_SECONDS,
+            )
+            if not auth_barrier(page.url, self.site) and not is_account_url(
+                page.url, self.site
+            ):
+                # The bounce can land on /customer-logged; ask for /account again.
+                await goto(page, self.site.account_url, self.site)
+                await asyncio.sleep(1.0)
             await self.check_authenticated()
 
             loop = asyncio.get_running_loop()
@@ -425,7 +351,7 @@ class My3:
             return Account(contract.validate_cuid(seen.pop()), "spa_seed_response")
 
         logger.info("SPA seed request not seen; falling back to sessionStorage")
-        await self.wait_while_loading()
+        await nav.wait_for_stable_text(self.page)
         raw = await page.evaluate(
             "() => sessionStorage.getItem('persist:customerProfilePersistor')"
         )
@@ -534,7 +460,7 @@ class My3:
             if response.status == 200 and content_type.lower().startswith(
                 "application/pdf"
             ):
-                # Buffered whole by APIRequestContext; fine for a 0.5-2 MB bill,
+                # Buffered whole by APIRequestContext; fine for a 0.5-3 MB bill,
                 # but it means the cap is checked after the download.
                 body = await response.body()
             validate_pdf(response.status, content_type, body)
@@ -563,35 +489,3 @@ class My3:
             size=result.get("size"),
         )
         return body, result.get("token") or token  # type: ignore[return-value]
-
-    # -- diagnostics -----------------------------------------------------
-
-    async def capture_diagnostics(
-        self, directory: Path, error: ThreeBillError
-    ) -> dict[str, str]:
-        """Screenshot plus the redacted API log. No bodies, tokens or cookies."""
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        directory.mkdir(parents=True, exist_ok=True)
-        directory.chmod(0o700)
-        out: dict[str, str] = {}
-        log_path = directory / f"three-bill-{stamp}.json"
-        try:
-            page_path: str | None = contract.redact_url(self.page.url)
-        except Exception:
-            page_path = None
-        payload = {
-            "error": error.code,
-            "page": page_path,
-            "requests": self.network.entries,
-        }
-        log_path.write_text(json.dumps(payload, indent=2))
-        log_path.chmod(0o600)
-        out["network_log"] = str(log_path)
-        try:
-            shot = directory / f"three-bill-{stamp}.png"
-            await self.page.screenshot(path=str(shot))
-            shot.chmod(0o600)
-            out["screenshot"] = str(shot)
-        except Exception:
-            logger.debug("Screenshot failed", exc_info=True)
-        return out
