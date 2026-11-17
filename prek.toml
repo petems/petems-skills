@@ -8,7 +8,8 @@ hooks = [
   { id = "check-json" },
   { id = "check-merge-conflict" },
   { id = "detect-private-key" },
-  { id = "check-added-large-files" },
+  # The recorded demo trace is a deliberate ~750 KB fixture.
+  { id = "check-added-large-files", exclude = "^skills/simplify-chrome-trace-petems/examples/demo-trace\\.json\\.gz$" },
 ]
 
 [[repos]]
