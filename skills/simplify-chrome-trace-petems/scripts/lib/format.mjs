@@ -49,9 +49,12 @@ export function escapeCell(v) {
 /** Render a markdown table. */
 export function mdTable(headers, rows) {
   const out = [];
-  out.push('| ' + headers.map(escapeCell).join(' | ') + ' |');
-  out.push('|' + headers.map(() => '---').join('|') + '|');
-  for (const r of rows) out.push('| ' + r.map(escapeCell).join(' | ') + ' |');
+  // Compact style with one space either side of every pipe (and a single
+  // space for empty cells) so reports pass markdownlint's MD060.
+  const line = (cells) => '|' + cells.map((c) => (c === '' ? ' ' : ` ${c} `)).join('|') + '|';
+  out.push(line(headers.map(escapeCell)));
+  out.push(line(headers.map(() => '---')));
+  for (const r of rows) out.push(line(r.map(escapeCell)));
   return out.join('\n');
 }
 

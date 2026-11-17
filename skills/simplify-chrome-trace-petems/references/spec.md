@@ -351,7 +351,8 @@ node scripts/simplify-chrome-trace.mjs <trace.json[.gz]> [options]
 
 ## Output formatting
 
-* Markdown tables with header separator `|---|`. Cell contents escaped:
+* Markdown tables in compact style (`| a | b |`, separator `| --- | --- |`,
+  empty cells as a single space) so they pass markdownlint. Cell contents escaped:
   `|` becomes `\|`, newlines become spaces, and very long cells are
   truncated at 120 chars with `...`.
 * Numbers: ms with one decimal (`12.3`), counts with `,` thousands separators

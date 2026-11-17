@@ -1,6 +1,6 @@
 // vitals: navigation, FCP, LCP, CLS, DOMContentLoaded, load.
 
-import { fmtMs, mdTable, round3 } from '../format.mjs';
+import { fmtMs, mdTable, round3, shortUrl } from '../format.mjs';
 import { emptyBlock, heading, offsetFields, offsetHeaders, offsetCells } from './common.mjs';
 
 /**
@@ -61,7 +61,7 @@ export function compute(ctx) {
       detail,
     });
   };
-  if (nav) row('Navigation start', nav.ts, nav.url || '');
+  if (nav) row('Navigation start', nav.ts, nav.url ? shortUrl(nav.url) : '');
   const fcp = after(fcps)[0];
   if (fcp) row('First Contentful Paint', fcp.ts, '');
   const lcps = after(of('largestContentfulPaint::Candidate'));

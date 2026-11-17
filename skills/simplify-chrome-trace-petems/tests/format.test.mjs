@@ -12,7 +12,8 @@ describe('markdown formatting', () => {
     const long = escapeCell('x'.repeat(200));
     assert.equal(long.length, 120);
     assert.ok(long.endsWith('...'));
-    assert.equal(mdTable(['a', 'b'], [['1|2', '3']]), '| a | b |\n|---|---|\n| 1\\|2 | 3 |');
+    assert.equal(mdTable(['a', 'b'], [['1|2', '3']]), '| a | b |\n| --- | --- |\n| 1\\|2 | 3 |');
+    assert.equal(mdTable(['a', 'b'], [['', 'x']]), '| a | b |\n| --- | --- |\n| | x |', 'empty cell is a single space');
   });
 
   it('formats ms with one decimal and counts with commas regardless of locale', () => {
