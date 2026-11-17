@@ -112,8 +112,8 @@ export class TraceBuilder {
     return this;
   }
 
-  request({ requestId, url, sendTs, responseTs, finishTs, status = 200, method = 'GET', finishBytes, dataChunks = [], didFail = false, pid = PID, tid = TID, mimeType = 'text/html' }) {
-    this.instant('ResourceSendRequest', sendTs, { pid, tid, args: { data: { requestId, url, requestMethod: method, priority: 'High' } } });
+  request({ requestId, url, sendTs, responseTs, finishTs, status = 200, method = 'GET', finishBytes, dataChunks = [], didFail = false, pid = PID, tid = TID, mimeType = 'text/html', frame }) {
+    this.instant('ResourceSendRequest', sendTs, { pid, tid, args: { data: { requestId, url, requestMethod: method, priority: 'High', ...(frame ? { frame } : {}) } } });
     if (responseTs !== undefined) {
       this.instant('ResourceReceiveResponse', responseTs, { pid, tid, args: { data: { requestId, statusCode: status, mimeType, fromCache: false, fromServiceWorker: false } } });
     }

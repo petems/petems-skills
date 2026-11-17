@@ -13,13 +13,20 @@ export function inpEstimate(durations) {
 
 const pos = (x) => (x > 0 ? x : 0);
 
+// Events presented in the same frame end at the same time (timeStamp +
+// duration); allow for rounding.
+const SAME_FRAME_US_MS = 1;
+
 /**
  * Group EventTiming records into interactions. Pure.
  *
- * Phases span every event in the interaction (as web-vitals attribution
- * does), not just the longest one: a click is usually pointerdown +
- * pointerup + click, and the slow handler may live on a different event
- * from the one with the longest duration.
+ * An interaction's duration is its worst event's duration. Its phases come
+ * from the worst event's presentation frame: every event of the interaction
+ * that ends with it (same frame) is combined, as web-vitals attribution does,
+ * since a click is usually pointerdown + pointerup + click and the slow
+ * handler may sit on a different event from the longest one. Events that
+ * painted in an earlier frame (a pointerdown before a long hold, say) are left
+ * out, so the hold is not counted as processing.
  *   input delay  = earliest processingStart - earliest timeStamp
  *   processing   = latest processingEnd - earliest processingStart
  *   presentation = duration - input delay - processing
@@ -29,40 +36,36 @@ export function groupInteractions(records) {
   for (const r of records) {
     const key = `${r.pid}|${r.interactionId}`;
     let g = groups.get(key);
-    if (!g) {
-      groups.set(
-        key,
-        (g = {
-          pid: r.pid,
-          interactionId: r.interactionId,
-          ts: r.ts,
-          types: [],
-          duration: 0,
-          start: Infinity,
-          procStart: Infinity,
-          procEnd: -Infinity,
-        }),
-      );
-    }
+    if (!g) groups.set(key, (g = { pid: r.pid, interactionId: r.interactionId, ts: r.ts, types: [], events: [] }));
     if (r.ts < g.ts) g.ts = r.ts;
     if (!g.types.includes(r.type)) g.types.push(r.type);
-    if (r.duration > g.duration) g.duration = r.duration;
-    if (r.timeStamp < g.start) g.start = r.timeStamp;
-    if (r.processingStart < g.procStart) g.procStart = r.processingStart;
-    if (r.processingEnd > g.procEnd) g.procEnd = r.processingEnd;
+    g.events.push(r);
   }
   return [...groups.values()].map((g) => {
-    const inputDelayMs = Math.min(g.duration, pos(g.procStart - g.start));
-    const processingMs = Math.min(g.duration - inputDelayMs, pos(g.procEnd - g.procStart));
+    let worst = g.events[0];
+    for (const e of g.events) if (e.duration > worst.duration) worst = e;
+    const frameEnd = worst.timeStamp + worst.duration;
+    const sameFrame = g.events.filter((e) => Math.abs(e.timeStamp + e.duration - frameEnd) <= SAME_FRAME_US_MS);
+    let start = Infinity;
+    let procStart = Infinity;
+    let procEnd = -Infinity;
+    for (const e of sameFrame) {
+      if (e.timeStamp < start) start = e.timeStamp;
+      if (e.processingStart < procStart) procStart = e.processingStart;
+      if (e.processingEnd > procEnd) procEnd = e.processingEnd;
+    }
+    const duration = worst.duration;
+    const inputDelayMs = Math.min(duration, pos(procStart - start));
+    const processingMs = Math.min(duration - inputDelayMs, pos(procEnd - procStart));
     return {
       pid: g.pid,
       interactionId: g.interactionId,
       ts: g.ts,
       types: g.types,
-      durationMs: g.duration,
+      durationMs: duration,
       inputDelayMs,
       processingMs,
-      presentationMs: pos(g.duration - inputDelayMs - processingMs),
+      presentationMs: pos(duration - inputDelayMs - processingMs),
     };
   });
 }

@@ -121,7 +121,7 @@ describe('CLI (child process)', () => {
     assert.equal(b.status, 0, b.stderr);
     const strip = (s) => s.replace(/- File: .*\n/, '');
     assert.equal(strip(a.stdout), strip(b.stdout));
-    assert.match(a.stdout, /^# Trace summary: trace\.json\n/);
+    assert.match(a.stdout, /^> Untrusted data: [^\n]+\n\n# Trace summary: trace\.json\n/);
     assert.ok(a.stdout.endsWith('\n') && !a.stdout.endsWith('\n\n'));
     assert.ok(!/\n\n\n/.test(a.stdout));
     for (const h of ['## Long tasks', '## Interactions', '## Hottest JS functions', '## Network', '## WebSocket', '## Timeline']) assert.ok(a.stdout.includes(h), h);
@@ -160,7 +160,8 @@ describe('JSON output', () => {
     const b = richTrace();
     const report = analyze(b.events, { sections: SECTION_KEYS, metadata: b.metadata, fileName: 'x.json' });
     const doc = JSON.parse(render(report, { format: 'json' }));
-    assert.deepEqual(Object.keys(doc), ['file', 'meta', 'warnings', 'sections']);
+    assert.deepEqual(Object.keys(doc), ['notice', 'file', 'meta', 'warnings', 'sections']);
+    assert.match(doc.notice, /^Untrusted data:/);
     assert.equal(doc.file, 'x.json');
     assert.deepEqual(Object.keys(doc.sections), SECTION_KEYS);
     assert.ok(Array.isArray(doc.warnings));

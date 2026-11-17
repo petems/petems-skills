@@ -185,8 +185,9 @@ note, so the agent knows it was checked.
 * per profiled thread: busy / idle / program / GC sampled ms
 * main-thread task stats in scope: number of tasks, total busy ms, busy % of
   scope, count of tasks > 50 ms, **Total Blocking Time** (each task's
-  blocking portion is everything after its first 50 ms, after artifact
-  removal, and only the part inside the window counts, as Lighthouse clips
+  blocking portion is everything after its first 50 ms of effective
+  (non-artifact) time, so profiler overhead is never counted as blocking
+  wherever it sits in the task, and only the part inside the window counts, as Lighthouse clips
   to its FCP/TTI range; label it "TBT (all tasks in scope)" since we don't
   bound it by FCP/TTI). Busy time is the union of task intervals across
   scope threads clipped to the window, so busy % never exceeds 100% even
@@ -212,9 +213,16 @@ node/type if present), `LayoutShift` (`args.data.score`, exclude
 `had_recent_input`; report total CLS and the largest session window using
 the standard 1 s gap / 5 s cap rule), `MarkDOMContent`, `MarkLoad`.
 Times shown as trace offset and, when `navigationStart` exists, relative to
-it. Every metric (paints, load markers, layout shifts) is bounded to the
-chosen navigation: from it up to the next navigation, so another page's
-metrics never mix in. If none exist (typical for a non-navigation
+it. The navigation is chosen from the page's records regardless of the
+window (a window can start after the navigation its paints belong to): the
+last navigation at or before the chronologically first page-load metric in
+the window (FCP, LCP, DOMContentLoaded, load or a layout shift, whichever
+comes first; preferring a later FCP could jump to a second page). Every
+metric (paints, load markers, layout shifts) is bounded to that navigation,
+up to the next one, so another page's metrics never mix in. Reported metrics
+are windowed, and the navigation row appears only when it is in the window.
+A user `performance.measure()` named like a vital (`b`/`e`/`X` in
+`blink.user_timing`) is user timing, never a vital. If none exist (typical for a non-navigation
 recording), print the note.
 
 ### longtasks
@@ -239,10 +247,13 @@ recording), print the note.
   `interactionId > 0`. Group by `interactionId` (scoped by pid); the
   interaction's duration is the max `duration` of its events.
 * For each: offset (from the earliest `b` event ts), `type`s involved,
-  duration, and three phases computed across **all** events of the
-  interaction (as web-vitals attribution does), since a click is usually
-  pointerdown + pointerup + click and the slow handler may sit on a
-  different event from the one with the longest duration:
+  duration, and three phases computed across the events presented in the
+  **worst event's frame** (those ending at the same `timeStamp + duration`,
+  within 1 ms), as web-vitals attribution does. A click is usually
+  pointerdown + pointerup + click painted together, and the slow handler may
+  sit on a different event from the longest one. Events painted in an earlier
+  frame (a pointerdown before a long hold) are left out, so a hold is never
+  counted as processing:
   * input delay = earliest `processingStart` - earliest `timeStamp`
   * processing = latest `processingEnd` - earliest `processingStart`
   * presentation delay = duration - input delay - processing
@@ -269,7 +280,9 @@ recording), print the note.
 Aggregate duration events in scope by name (thread scope: main thread by
 default; `--thread all` for everything). Columns: `name`, `count`,
 `self (ms)`, `total (ms)`, `avg (ms)`, `max (ms)`. Sorted by self desc.
-Profiler artifact events are excluded and mentioned in a note.
+Profiler artifact events, and events nested inside them (GC during
+`StartProfiling`, say), are excluded from events, frequent and categories,
+and mentioned in a note.
 
 ### frequent
 
@@ -322,10 +335,14 @@ Captured: url, method, priority, offset, TTFB (response - send), duration
 (finish - send), encoded size (from finish `encodedDataLength`, else summed
 `ResourceReceivedData`), status, mimeType, `fromCache`/`fromServiceWorker`,
 `didFail`. Requests included when send ts is in window and url matches.
-Requests from a different renderer process than the scope (another tab, an
-out-of-process iframe) are dropped; browser and service processes are kept,
-since Chrome may emit a page's own navigation requests there. `--thread all`
-keeps everything. The same rule applies to WebSocket events.
+Requests from the scope's renderer are kept; requests from a different
+renderer (another tab, an out-of-process iframe) are dropped. Browser and
+service processes can carry any tab's traffic, so their requests are kept
+only when their `frame` is one of the page's frames (the main frame ids from
+the trace plus frames seen on the page renderer's own requests); the rest
+are omitted with a one-line note pointing at `--thread all`, which keeps
+everything. The same rule applies to WebSocket events, with each
+connection's frame shared across its events.
 Sorted by offset. Columns: `offset (ms)`, optional UTC, `ttfb (ms)`,
 `dur (ms)`, `size (KB)`, `status`, `method`, `url`. URLs drop the scheme and
 are middle-truncated to 90 chars (`start...end`). A one-line rollup above the
@@ -374,6 +391,15 @@ node scripts/simplify-chrome-trace.mjs <trace.json[.gz]> [options]
   <secs>s`.
 
 ## Output formatting
+
+* Trace text is untrusted: names, marks, URLs, function names and messages
+  come from the recorded page. Every markdown report starts with a one-line
+  blockquote saying so, and `--format json` carries the same text in a
+  top-level `notice` field. All trace text is reduced to one line with
+  control, bidi and zero-width characters removed, so it cannot start its
+  own markdown lines or hide what it says. This covers table cells and every
+  piece of prose built from the trace: thread and process names (cleaned when
+  collected), the file name, metadata fields and warnings.
 
 * Markdown tables in compact style (`| a | b |`, separator `| --- | --- |`,
   empty cells as a single space) so they pass markdownlint. Cell contents escaped:

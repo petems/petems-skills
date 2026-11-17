@@ -1,6 +1,7 @@
 // Main thread detection and --thread resolution.
 
 import { UserError } from './errors.mjs';
+import { cleanText } from './format.mjs';
 
 export function threadLabel(th) {
   const name = th.name || '(unnamed)';
@@ -87,7 +88,9 @@ export function resolveThreads(model, opt) {
     if (hit.length === 0) throw new UserError(`no thread ${opt} in trace. Threads: ${availableThreads(model)}`);
     return { threads: hit, reason: `--thread ${opt}`, all: false };
   }
-  const lower = opt.toLowerCase();
+  // Stored thread names are cleaned (see collect.mjs), so clean the
+  // requested name the same way before comparing.
+  const lower = cleanText(opt).toLowerCase();
   const hit = model.threads.filter((t) => t.name.toLowerCase() === lower);
   if (hit.length === 0) throw new UserError(`no thread named "${opt}" in trace. Threads: ${availableThreads(model)}`);
   return { threads: withEventsFirst(hit), reason: `--thread "${opt}"`, all: false };

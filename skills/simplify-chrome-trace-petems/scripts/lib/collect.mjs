@@ -2,6 +2,8 @@
 // out of the tokenizer) and keeps compact records only. Everything that
 // depends on CLI options (window, thread choice) happens later in analyze.
 
+import { cleanText } from './format.mjs';
+
 const VITAL_NAMES = new Set([
   'navigationStart',
   'firstContentfulPaint',
@@ -148,15 +150,22 @@ export class TraceCollector {
       if (ph === 'b') this._eventTiming(ev);
       return;
     }
-    if (VITAL_NAMES.has(name)) this._vital(ev);
+    const cat = ev.cat;
+    const isUserTiming = typeof cat === 'string' && cat.includes('blink.user_timing');
+    // A user performance.measure() is b/e (or X) in blink.user_timing. Even if
+    // it is named like a vital (say `navigationStart`), it is not one: only
+    // native instant marks count as vitals.
+    const isUserMeasure = isUserTiming && (ev.ph === 'b' || ev.ph === 'e' || ev.ph === 'X');
+    if (VITAL_NAMES.has(name) && !isUserMeasure) this._vital(ev);
     else if (NETWORK_NAMES.has(name)) this._network(ev);
     else if (name === 'TimeStamp') this._timeStamp(ev);
     else if (name === 'TracingStartedInBrowser') this._tracingStarted(ev);
     else if (FRAME_PROCESS_NAMES.has(name)) this._frameProcess(ev);
     else if (typeof name === 'string' && name.startsWith('WebSocket')) this._websocket(ev);
 
-    const cat = ev.cat;
-    if (typeof cat === 'string' && cat.includes('blink.user_timing') && name !== 'navigationStart') {
+    // The native navigationStart mark is a vital, not user timing; a user
+    // measure with that name is user timing.
+    if (isUserTiming && (name !== 'navigationStart' || isUserMeasure)) {
       this._userTiming(ev);
     }
   }
@@ -165,9 +174,12 @@ export class TraceCollector {
     const n = ev.args && ev.args.name;
     if (ev.name === 'thread_name') {
       const th = this._thread(ev.pid, ev.tid);
-      if (typeof n === 'string') th.name = n;
+      // Thread and process names come from the trace and end up in report
+      // prose (headings, the summary), not only table cells, so clean them
+      // once here.
+      if (typeof n === 'string') th.name = cleanText(n);
     } else if (ev.name === 'process_name') {
-      if (typeof n === 'string') this.processNames.set(ev.pid, n);
+      if (typeof n === 'string') this.processNames.set(ev.pid, cleanText(n));
     }
   }
 
@@ -270,6 +282,7 @@ export class TraceCollector {
       r = {
         requestId: id,
         pid: ev.pid,
+        frame: '',
         url: '',
         method: '',
         priority: '',
@@ -286,6 +299,7 @@ export class TraceCollector {
       };
       this.network.set(id, r);
     }
+    if (!r.frame && typeof d.frame === 'string') r.frame = d.frame;
     switch (ev.name) {
       case 'ResourceSendRequest':
         if (r.sendTs === null) r.sendTs = ev.ts;
@@ -352,6 +366,7 @@ export class TraceCollector {
       pid: ev.pid,
       ts: ev.ts,
       identifier: d.identifier,
+      frame: typeof d.frame === 'string' ? d.frame : '',
       url: typeof d.url === 'string' ? d.url : '',
     });
   }

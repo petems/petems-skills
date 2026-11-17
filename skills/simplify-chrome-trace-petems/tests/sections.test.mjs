@@ -49,6 +49,23 @@ describe('long tasks', () => {
   });
 });
 
+describe('profiler artifacts in event tables', () => {
+  it('excludes work nested inside a profiler artifact from events, frequent and categories', () => {
+    const b = new TraceBuilder().mainThread();
+    b.x('RunTask', BASE, ms(100));
+    b.x('CpuProfiler::StartProfiling', BASE, ms(60));
+    b.x('MajorGC', BASE + ms(10), ms(30)); // recording overhead, not app GC
+    b.x('FunctionCall', BASE + ms(70), ms(20)); // real work
+    const names = (k) => section(b.events, k).rows.map((r) => r.name);
+    assert.ok(!names('events').includes('MajorGC'));
+    assert.ok(!names('frequent').includes('MajorGC'));
+    assert.ok(names('events').includes('FunctionCall'));
+    const groups = section(b.events, 'categories').rows.map((g) => g.group);
+    assert.ok(!groups.includes('Garbage Collection'));
+    assert.match(section(b.events, 'events').artifactNote, /and 1 event\(s\) nested inside them/);
+  });
+});
+
 describe('summary task stats', () => {
   it('computes TBT over tasks > 50 ms after artifact removal', () => {
     const b = new TraceBuilder().mainThread();
@@ -79,6 +96,26 @@ describe('summary task stats', () => {
     assert.equal(section(b.events, 'summary', { window: '99-150' }).tasks.tbtMs, 1);
     assert.equal(section(b.events, 'summary', { window: '0-40' }).tasks.tbtMs, 0, 'first 50 ms is not blocking');
     assert.equal(section(b.events, 'summary', { window: '0-150' }).tasks.tbtMs, 50);
+  });
+
+  it('TBT never counts profiler overhead, wherever it sits in the task', () => {
+    // 100 ms task with 40 ms of profiler overhead: 60 ms effective, so 10 ms
+    // of blocking time, at the end of the effective time.
+    const cases = [
+      { name: 'end', art: [60, 40], blocking: [50, 60], artifactWindow: '90-100' },
+      { name: 'start', art: [0, 40], blocking: [90, 100], artifactWindow: '0-40' },
+      { name: 'middle', art: [30, 40], blocking: [90, 100], artifactWindow: '30-70' },
+    ];
+    for (const c of cases) {
+      const b = new TraceBuilder().mainThread();
+      b.x('RunTask', BASE, ms(100));
+      b.x(c.art[0] === 0 ? 'CpuProfiler::StartProfiling' : 'CpuProfiler::StopProfiling', BASE + ms(c.art[0]), ms(c.art[1]));
+      b.x('Marker', BASE + ms(200), ms(1));
+      const tbt = (w) => section(b.events, 'summary', { window: w }).tasks.tbtMs;
+      assert.equal(tbt('0-150'), 10, `${c.name}: total`);
+      assert.equal(tbt(`${c.blocking[0]}-${c.blocking[1]}`), 10, `${c.name}: blocking lands on real work`);
+      assert.equal(tbt(c.artifactWindow), 0, `${c.name}: none inside the artifact`);
+    }
   });
 
   it('busy % never exceeds 100% with several threads in scope', () => {
@@ -129,7 +166,7 @@ describe('timeline', () => {
 });
 
 describe('interactions', () => {
-  it('computes phases across all events of an interaction and groups by interactionId', () => {
+  it('computes phases from the worst event frame and groups by interactionId', () => {
     const g = groupInteractions([
       { pid: 1, ts: 10, interactionId: 3, type: 'pointerdown', duration: 50, timeStamp: 100, processingStart: 105, processingEnd: 120 },
       { pid: 1, ts: 12, interactionId: 3, type: 'click', duration: 80, timeStamp: 100, processingStart: 130, processingEnd: 160 },
@@ -139,8 +176,10 @@ describe('interactions', () => {
     const a = g[0];
     assert.deepEqual(a.types, ['pointerdown', 'click']);
     assert.equal(a.durationMs, 80);
-    assert.equal(a.inputDelayMs, 5, 'earliest processingStart - earliest timeStamp');
-    assert.equal(a.processingMs, 55, 'earliest processingStart to latest processingEnd');
+    // pointerdown ended at 150, click at 180: different frames, so only the
+    // click's frame counts.
+    assert.equal(a.inputDelayMs, 30);
+    assert.equal(a.processingMs, 30);
     assert.equal(a.presentationMs, 20, 'remainder of the duration');
     assert.equal(g[1].inputDelayMs, 0, 'negative input delay clamps to 0');
     assert.equal(g[1].presentationMs, 0);
@@ -158,6 +197,20 @@ describe('interactions', () => {
     assert.ok(Math.abs(g.inputDelayMs - 0.3) < 1e-9);
     assert.ok(Math.abs(g.processingMs - 396) < 1e-9);
     assert.ok(Math.abs(g.inputDelayMs + g.processingMs + g.presentationMs - 399) < 1e-9, 'phases sum to duration');
+  });
+
+  it('does not count a held pointer as processing', () => {
+    // pointerdown painted on its own at 16 ms; the pointer is held until
+    // 500 ms; pointerup + click paint together at 520 ms. Handlers are 1 ms.
+    const [g] = groupInteractions([
+      { pid: 1, ts: 1, interactionId: 4, type: 'pointerdown', duration: 16, timeStamp: 0, processingStart: 0, processingEnd: 1 },
+      { pid: 1, ts: 2, interactionId: 4, type: 'pointerup', duration: 20, timeStamp: 500, processingStart: 500, processingEnd: 501 },
+      { pid: 1, ts: 3, interactionId: 4, type: 'click', duration: 20, timeStamp: 500, processingStart: 501, processingEnd: 502 },
+    ]);
+    assert.equal(g.durationMs, 20);
+    assert.equal(g.inputDelayMs, 0);
+    assert.equal(g.processingMs, 2);
+    assert.equal(g.presentationMs, 18);
   });
 
   it('INP: worst below 50 interactions, skip one per 50 above', () => {
@@ -195,6 +248,18 @@ describe('marks', () => {
     assert.deepEqual(d.rows.map((r) => [r.kind, r.name, r.durMs]), [['measure', 'loadEventEnd', 7]]);
   });
 
+  it('a user measure named navigationStart is a measure, not a navigation', () => {
+    const b = new TraceBuilder().mainThread();
+    b.x('RunTask', BASE, 10);
+    b.instant('navigationStart', BASE + ms(1), { cat: 'blink.user_timing', args: { frame: 'F1', data: { documentLoaderURL: 'https://real.test/', isLoadingMainFrame: true } } });
+    b.instant('firstContentfulPaint', BASE + ms(100), { cat: 'loading', args: { frame: 'F1' } });
+    b.measure('navigationStart', BASE + ms(500), ms(20));
+    const v = section(b.events, 'vitals');
+    assert.equal(v.navigations, 1);
+    assert.equal(v.rows.find((r) => r.metric === 'First Contentful Paint').sinceNavMs, 99);
+    assert.deepEqual(section(b.events, 'marks').rows.map((r) => [r.kind, r.name, r.durMs]), [['measure', 'navigationStart', 20]]);
+  });
+
   it('lists marks, paired measures and console.timeStamp sorted by offset, filtered by --match', () => {
     const b = new TraceBuilder().mainThread();
     b.x('RunTask', BASE, 10);
@@ -216,15 +281,19 @@ describe('marks', () => {
 });
 
 describe('network', () => {
-  it('drops other renderers requests but keeps the browser process', () => {
+  it('keeps browser-process requests only when tied to the page frame', () => {
     const b = new TraceBuilder().mainThread().threadName(200, 1, 'CrRendererMain').threadName(1, 1, 'CrBrowserMain');
     b.x('RunTask', BASE, ms(1));
-    b.request({ requestId: 'p', url: 'https://page.test/', sendTs: BASE + ms(1) });
-    b.request({ requestId: 'o', url: 'https://other-tab.test/', sendTs: BASE + ms(2), pid: 200 });
-    b.request({ requestId: 'b', url: 'https://page.test/doc', sendTs: BASE + ms(3), pid: 1 });
-    const urls = (o) => section(b.events, 'network', o).rows.map((r) => r.url);
-    assert.deepEqual(urls({}), ['https://page.test/', 'https://page.test/doc']);
-    assert.equal(urls({ thread: 'all' }).length, 3);
+    b.request({ requestId: 'p', url: 'https://page.test/', sendTs: BASE + ms(1), frame: 'PAGE' });
+    b.request({ requestId: 'o', url: 'https://other-tab.test/', sendTs: BASE + ms(2), pid: 200, frame: 'OTHER' });
+    b.request({ requestId: 'b', url: 'https://page.test/doc', sendTs: BASE + ms(3), pid: 1, frame: 'PAGE' });
+    b.request({ requestId: 'x', url: 'https://unrelated.test/', sendTs: BASE + ms(4), pid: 1, frame: 'ELSEWHERE' });
+    b.request({ requestId: 'n', url: 'https://unknown.test/', sendTs: BASE + ms(5), pid: 1 });
+    const d = section(b.events, 'network');
+    assert.deepEqual(d.rows.map((r) => r.url), ['https://page.test/', 'https://page.test/doc']);
+    assert.match(d.omitted, /^2 requests from the browser or a service process could not be tied to this page/);
+    assert.match(render(analyze(b.events, { sections: ['network'] }), { format: 'md' }), /use --thread all to include them/);
+    assert.equal(section(b.events, 'network', { thread: 'all' }).rows.length, 5);
   });
 
   it('builds rollup, sizes, TTFB and truncates long URLs', () => {
@@ -300,8 +369,67 @@ describe('vitals', () => {
     assert.equal(d.cls.total, 0.3);
   });
 
-  it('does not count an earlier page layout shifts in CLS', () => {
-    const d = twoNavs(false); // only the second page painted, so it is chosen
+  it('chooses the navigation from the whole trace, then windows the metrics', () => {
+    const build = () => {
+      const b = new TraceBuilder().mainThread();
+      const nav = (t) => b.instant('navigationStart', BASE + ms(t), { cat: 'blink.user_timing', args: { frame: 'F1', data: { documentLoaderURL: `https://a.test/${t}`, isLoadingMainFrame: true } } });
+      const fcp = (t) => b.instant('firstContentfulPaint', BASE + ms(t), { cat: 'loading', args: { frame: 'F1' } });
+      nav(0);
+      fcp(100);
+      nav(1000);
+      fcp(1100);
+      return b.events;
+    };
+    const metric = (d, m) => d.rows.find((r) => r.metric === m);
+    // Window starts after the first navigation: its FCP still belongs to it.
+    const early = section(build(), 'vitals', { window: '50-1200' });
+    assert.equal(metric(early, 'First Contentful Paint').offsetMs, 100);
+    assert.equal(metric(early, 'First Contentful Paint').sinceNavMs, 100);
+    assert.equal(metric(early, 'Navigation start'), undefined, 'navigation row is outside the window');
+    // Window holding only the second page load picks the second navigation.
+    const late = section(build(), 'vitals', { window: '500-1200' });
+    assert.equal(metric(late, 'Navigation start').detail, 'a.test/1000');
+    assert.equal(metric(late, 'First Contentful Paint').sinceNavMs, 100);
+  });
+
+  it('anchors on the earliest metric in the window, not a later FCP', () => {
+    const b = new TraceBuilder().mainThread();
+    const nav = (t) => b.instant('navigationStart', BASE + ms(t), { cat: 'blink.user_timing', args: { frame: 'F1', data: { documentLoaderURL: `https://a.test/${t}`, isLoadingMainFrame: true } } });
+    const at = (name, t, data = {}) => b.instant(name, BASE + ms(t), { cat: 'loading', args: { frame: 'F1', data } });
+    nav(0);
+    at('firstContentfulPaint', 100);
+    at('largestContentfulPaint::Candidate', 200, { size: 1 });
+    nav(1000);
+    at('firstContentfulPaint', 1100);
+    // Window holds page A's LCP, then page B's navigation and FCP.
+    const d = section(b.events, 'vitals', { window: '150-1200' });
+    const lcp = d.rows.find((r) => r.metric === 'Largest Contentful Paint');
+    assert.equal(lcp && lcp.offsetMs, 200, "page A's LCP is kept");
+    assert.equal(d.rows.find((r) => r.metric === 'First Contentful Paint'), undefined, "page B's FCP belongs to another page");
+    // A window whose first metric is a layout shift anchors on it too.
+    b.instant('LayoutShift', BASE + ms(1050), { args: { frame: 'F1', data: { score: 0.1, had_recent_input: false } } });
+    const s = section(b.events, 'vitals', { window: '1040-1200' });
+    assert.equal(s.rows.find((r) => r.metric === 'First Contentful Paint').sinceNavMs, 100, 'relative to page B');
+    assert.equal(s.cls.shifts, 1);
+  });
+
+  it('counts only the chosen page layout shifts in CLS', () => {
+    // Page one's earliest metric is its layout shift, so page one is chosen
+    // for the whole trace: page two's shift is excluded.
+    const whole = twoNavs(false);
+    assert.equal(whole.cls.shifts, 1);
+    assert.equal(whole.cls.total, 0.3);
+    // A window over page two only: page one's shift is excluded.
+    const d = (() => {
+      const b = new TraceBuilder().mainThread();
+      const nav = (t, url) => b.instant('navigationStart', BASE + ms(t), { cat: 'blink.user_timing', args: { frame: 'F1', data: { documentLoaderURL: url, isLoadingMainFrame: true } } });
+      nav(0, 'https://a.test/one');
+      b.instant('LayoutShift', BASE + ms(50), { args: { frame: 'F1', data: { score: 0.3, had_recent_input: false } } });
+      nav(1000, 'https://a.test/two');
+      b.instant('firstContentfulPaint', BASE + ms(1100), { cat: 'loading', args: { frame: 'F1' } });
+      b.instant('LayoutShift', BASE + ms(1150), { args: { frame: 'F1', data: { score: 0.01, had_recent_input: false } } });
+      return section(b.events, 'vitals', { window: '900-1300' });
+    })();
     assert.equal(d.rows.find((r) => r.metric === 'Navigation start').detail, 'a.test/two');
     assert.equal(d.cls.shifts, 1);
     assert.equal(d.cls.total, 0.01);

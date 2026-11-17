@@ -1,7 +1,7 @@
 // network: request waterfall.
 
 import { fmtMs, fmtCount, mdTable, round3, shortUrl, byStr } from '../format.mjs';
-import { emptyBlock, heading, offsetFields, offsetHeaders, offsetCells, topN, moreLine, otherRendererFilter } from './common.mjs';
+import { emptyBlock, heading, offsetFields, offsetHeaders, offsetCells, topN, moreLine, pageRecordFilter, omittedNote } from './common.mjs';
 
 /** Shape one collected request into a row (µs in, ms out). */
 export function requestRow(r) {
@@ -22,12 +22,14 @@ export function requestRow(r) {
 }
 
 export function compute(ctx) {
-  const otherRenderer = otherRendererFilter(ctx);
-  let reqs = ctx.model.network.filter((r) => r.sendTs !== null && ctx.inWin(r.sendTs) && !otherRenderer(r.pid));
+  const inWindow = ctx.model.network.filter((r) => r.sendTs !== null && ctx.inWin(r.sendTs));
+  const page = pageRecordFilter(ctx, ctx.model.network);
+  let reqs = inWindow.filter((r) => page.keep(r));
+  const omitted = omittedNote(page.omitted(), page.omitted() === 1 ? 'request' : 'requests');
   if (ctx.matcher) reqs = reqs.filter((r) => ctx.matcher(r.url));
   reqs.sort((a, b) => a.sendTs - b.sendTs || byStr(String(a.requestId), String(b.requestId)));
   const rows = reqs.map((r) => ({ ...offsetFields(ctx, r.sendTs), ...requestRow(r) }));
-  if (!rows.length) return { rows: [], more: 0, note: 'No network requests (ResourceSendRequest) in scope.' };
+  if (!rows.length) return { rows: [], more: 0, omitted, note: ['No network requests (ResourceSendRequest) in scope.', omitted].filter(Boolean).join(' ') };
   let totalKB = 0;
   let failed = 0;
   let slowest = null;
@@ -40,6 +42,7 @@ export function compute(ctx) {
   return {
     rows: t.rows,
     more: t.more,
+    omitted,
     rollup: { count: rows.length, totalKB: round3(totalKB), failed, slowestMs: slowest ? slowest.durMs : null, slowestUrl: slowest ? slowest.url : null },
     hasUtc: !!ctx.utc,
   };
@@ -61,5 +64,5 @@ export function md(d) {
   const rollup = `${fmtCount(ru.count)} request${ru.count === 1 ? '' : 's'}, ${fmtMs(ru.totalKB)} KB, ${fmtCount(ru.failed)} failed, slowest ${fmtMs(ru.slowestMs)} ms${ru.slowestUrl ? ` (${shortUrl(ru.slowestUrl)})` : ''}.`;
   const headers = [...offsetHeaders(d.hasUtc), 'ttfb (ms)', 'dur (ms)', 'size (KB)', 'status', 'method', 'url'];
   const rows = d.rows.map((r) => [...offsetCells(r, d.hasUtc), fmtMs(r.ttfbMs), fmtMs(r.durMs), fmtMs(r.sizeKB), statusCell(r), r.method || '-', shortUrl(r.url)]);
-  return [heading(title), rollup, mdTable(headers, rows), moreLine(d.more)].filter(Boolean).join('\n\n');
+  return [heading(title), rollup, mdTable(headers, rows), moreLine(d.more), d.omitted].filter(Boolean).join('\n\n');
 }

@@ -1,11 +1,11 @@
 // summary: header block.
 
-import { fmtMs, fmtCount, fmtPct, round3 } from '../format.mjs';
+import { fmtMs, fmtCount, fmtPct, round3, cleanText } from '../format.mjs';
 import { overlap } from '../nesting.mjs';
 import { aggregateSamples } from '../profile.mjs';
 import { threadLabel, threadShort } from '../threads.mjs';
 import { ms } from './common.mjs';
-import { busyIntervals } from './timeline.mjs';
+import { busyIntervals, taskIntervals } from './timeline.mjs';
 
 export const TBT_THRESHOLD_US = 50000;
 
@@ -17,8 +17,9 @@ export const TBT_THRESHOLD_US = 50000;
  * window even with several threads in scope.
  *
  * TBT follows Lighthouse: a task's blocking portion is everything after its
- * first 50 ms, and only the part of that inside the window counts. A long
- * task that barely overlaps the window adds only what overlaps.
+ * first 50 ms of effective (non-artifact) time, and only the part of that
+ * inside the window counts. A long task that barely overlaps the window adds
+ * only what overlaps, and profiler overhead is never counted as blocking.
  */
 export function taskStats(ctx) {
   let count = 0;
@@ -33,14 +34,33 @@ export function taskStats(ctx) {
       count++;
       if (t.effDur > TBT_THRESHOLD_US) {
         over50++;
-        // Blocking portion: the last (effDur - 50 ms) of the task.
-        tbtUs += overlap(t.end - (t.effDur - TBT_THRESHOLD_US), t.end, start, end);
+        tbtUs += blockingInWindow(taskIntervals(t, ctx.nests.get(th.key).artifactIntervals.get(t.index)), start, end);
       }
     }
   }
   let busyUs = 0;
   for (const [s, e] of busyIntervals(ctx)) busyUs += overlap(s, e, start, end);
   return { count, busyMs: ms(busyUs), over50, tbtMs: ms(tbtUs) };
+}
+
+/**
+ * Blocking time of one task inside [start, end]: skip the first 50 ms of the
+ * task's effective (non-artifact) time, then count what remains inside the
+ * window. Profiler overhead is never counted as blocking, wherever it sits.
+ */
+export function blockingInWindow(intervals, start, end) {
+  let skip = TBT_THRESHOLD_US;
+  let total = 0;
+  for (const [s, e] of intervals) {
+    let from = s;
+    if (skip > 0) {
+      const used = Math.min(skip, e - s);
+      skip -= used;
+      from = s + used;
+    }
+    if (e > from) total += overlap(from, e, start, end);
+  }
+  return total;
 }
 
 function countInWindow(ctx) {
@@ -73,11 +93,13 @@ export function compute(ctx) {
   const tasks = taskStats(ctx);
   const busyPct = ctx.scopeMs > 0 ? round3((tasks.busyMs / ctx.scopeMs) * 100) : 0;
   return {
-    file: ctx.fileName,
+    // Everything the summary prints outside a table is cleaned: it can come
+    // from the trace (metadata, thread names) and must not start its own lines.
+    file: cleanText(ctx.fileName),
     fileSize: ctx.fileSize,
     eventCount: ctx.model.eventCount,
-    source: (ctx.metadata && ctx.metadata.source) || null,
-    startTime: (ctx.metadata && ctx.metadata.startTime) || null,
+    source: ctx.metadata && ctx.metadata.source ? cleanText(ctx.metadata.source) : null,
+    startTime: ctx.metadata && ctx.metadata.startTime ? cleanText(ctx.metadata.startTime) : null,
     spanMs: ms(ctx.traceEnd - ctx.origin),
     window: ctx.win.set
       ? {
@@ -89,7 +111,7 @@ export function compute(ctx) {
         }
       : null,
     mainThreads: ctx.scope.threads.map((t) => ({ label: threadLabel(t), pid: t.pid, tid: t.tid, name: t.name })),
-    threadReason: ctx.scope.reason,
+    threadReason: cleanText(ctx.scope.reason),
     profiles,
     tasks: { ...tasks, busyPct, scopeMs: round3(ctx.scopeMs) },
   };
@@ -135,7 +157,7 @@ export function md(d, report) {
   const warnings = (report && report.warnings) || [];
   if (warnings.length) {
     lines.push('- Warnings:');
-    for (const w of warnings) lines.push(`  - ${w}`);
+    for (const w of warnings) lines.push(`  - ${cleanText(w)}`);
   }
   return lines.join('\n');
 }

@@ -10,10 +10,11 @@ export function aggregateEvents(ctx) {
   const byCat = new Map();
   let artifacts = 0;
   let artifactUs = 0;
+  let nestedInArtifacts = 0;
   const { start, end } = ctx.win;
   for (const th of ctx.scope.threads) {
     const nest = ctx.nests.get(th.key);
-    const { events, winDur, winSelf, sameNameAncestor, isArtifact } = nest;
+    const { events, winDur, winSelf, sameNameAncestor, isArtifact, artifactAncestor } = nest;
     for (let k = 0; k < events.length; k++) {
       const e = events[k];
       const wd = winDur[k];
@@ -21,6 +22,13 @@ export function aggregateEvents(ctx) {
       if (isArtifact[k]) {
         artifacts++;
         artifactUs += wd;
+        continue;
+      }
+      // Work inside a profiler artifact (GC during StartProfiling, say) is
+      // recording overhead too, as summary and timeline already treat it.
+      // Its time is already part of the artifact's.
+      if (artifactAncestor[k]) {
+        nestedInArtifacts++;
         continue;
       }
       let a = byName.get(e.name);
@@ -39,7 +47,7 @@ export function aggregateEvents(ctx) {
       }
     }
   }
-  ctx._eventAgg = { byName, byCat, artifacts, artifactUs };
+  ctx._eventAgg = { byName, byCat, artifacts, artifactUs, nestedInArtifacts };
   return ctx._eventAgg;
 }
 
@@ -56,7 +64,7 @@ function rowsOf(agg) {
 
 function artifactNote(agg) {
   return agg.artifacts
-    ? `Excluded ${fmtCount(agg.artifacts)} profiler artifact event(s) (CpuProfiler::StartProfiling/StopProfiling, ${fmtMs(agg.artifactUs / 1000)} ms).`
+    ? `Excluded ${fmtCount(agg.artifacts)} profiler artifact event(s) (CpuProfiler::StartProfiling/StopProfiling, ${fmtMs(agg.artifactUs / 1000)} ms)${agg.nestedInArtifacts ? ` and ${fmtCount(agg.nestedInArtifacts)} event(s) nested inside them` : ''}.`
     : '';
 }
 

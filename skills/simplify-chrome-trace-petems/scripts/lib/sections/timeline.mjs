@@ -5,6 +5,24 @@ import { emptyBlock, heading } from './common.mjs';
 
 export const QUIET_PCT = 5;
 
+/**
+ * A task's effective intervals (µs): the task minus any nested profiler
+ * artifact intervals, in time order.
+ * @param {{ts:number,end:number}} t
+ * @param {[number, number][] | undefined} arts
+ */
+export function taskIntervals(t, arts) {
+  if (!arts) return [[t.ts, t.end]];
+  const out = [];
+  let cur = t.ts;
+  for (const [s, e] of arts.slice().sort((a, b) => a[0] - b[0])) {
+    if (s > cur) out.push([cur, Math.min(s, t.end)]);
+    if (e > cur) cur = e;
+  }
+  if (t.end > cur) out.push([cur, t.end]);
+  return out;
+}
+
 /** Busy intervals (µs) of scope threads: tasks minus nested artifacts, merged. */
 export function busyIntervals(ctx) {
   const list = [];
@@ -12,17 +30,7 @@ export function busyIntervals(ctx) {
     const nest = ctx.nests.get(th.key);
     for (const t of ctx.tasks.get(th.key)) {
       if (t.artifact || t.dur <= 0) continue;
-      const arts = nest.artifactIntervals.get(t.index);
-      if (!arts) {
-        list.push([t.ts, t.end]);
-        continue;
-      }
-      let cur = t.ts;
-      for (const [s, e] of arts.slice().sort((a, b) => a[0] - b[0])) {
-        if (s > cur) list.push([cur, s]);
-        if (e > cur) cur = e;
-      }
-      if (t.end > cur) list.push([cur, t.end]);
+      for (const iv of taskIntervals(t, nest.artifactIntervals.get(t.index))) list.push(iv);
     }
   }
   list.sort((a, b) => a[0] - b[0] || a[1] - b[1]);

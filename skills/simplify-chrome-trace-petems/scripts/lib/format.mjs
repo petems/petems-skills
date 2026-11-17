@@ -38,10 +38,24 @@ export function fmtBound(x) {
 
 export const MAX_CELL = 120;
 
+// Control characters, and bidi / zero-width characters that can make text
+// read differently from what it contains.
+const HIDDEN_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
+
+/**
+ * Make trace-controlled text safe to place in the report: one line, no
+ * control, bidi or zero-width characters. Trace text (event names, marks,
+ * URLs, function names) comes from the recorded page and is untrusted, so it
+ * must not be able to start its own markdown lines or hide what it says.
+ */
+export function cleanText(v) {
+  const s = v === null || v === undefined ? '' : String(v);
+  return s.replace(/\r\n|\r|\n|\t/g, ' ').replace(HIDDEN_CHARS, '');
+}
+
 /** Escape a markdown table cell. */
 export function escapeCell(v) {
-  let s = v === null || v === undefined ? '' : String(v);
-  s = s.replace(/\r\n|\r|\n/g, ' ');
+  let s = cleanText(v);
   if (s.length > MAX_CELL) s = s.slice(0, MAX_CELL - 3) + '...';
   return s.replace(/\|/g, '\\|');
 }
@@ -64,6 +78,7 @@ export function note(text) {
 
 /** Drop the URL scheme and middle-truncate to `max` chars (`start...end`). */
 export function shortUrl(url, max = 90) {
+  url = cleanText(url);
   let s = String(url || '').replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '');
   if (s.length > max) {
     const keep = max - 3;

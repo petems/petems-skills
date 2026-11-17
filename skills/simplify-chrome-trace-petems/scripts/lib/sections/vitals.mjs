@@ -32,30 +32,41 @@ function fmtScore(x) {
 export function compute(ctx) {
   const frameIds = ctx.mainFrame.frameIds;
   const all = ctx.scope.all;
-  const evs = ctx.model.vitals.filter((v) => {
-    if (typeof v.ts !== 'number' || !ctx.inWin(v.ts)) return false;
+  // Navigation choice uses the page's records regardless of the window: a
+  // window can start after the navigation its paints belong to. Reported
+  // metrics are then windowed.
+  const scoped = ctx.model.vitals.filter((v) => {
+    if (typeof v.ts !== 'number') return false;
     if (all) return true;
     if (!ctx.scopePids.has(v.pid)) return false;
     if (frameIds.size > 0 && v.frame && !frameIds.has(v.frame)) return false;
     return true;
   });
-  evs.sort((a, b) => a.ts - b.ts);
+  scoped.sort((a, b) => a.ts - b.ts);
+  const evs = scoped.filter((v) => ctx.inWin(v.ts));
   const of = (name) => evs.filter((v) => v.name === name);
+  const allNavs = scoped.filter((v) => v.name === 'navigationStart');
   const navs = of('navigationStart');
-  const fcps = of('firstContentfulPaint');
+  // Anchor on the chronologically first page-load metric in the window (any
+  // kind, layout shifts included), and pick the last navigation at or before
+  // it. Preferring a later FCP could jump to a second page and silently drop
+  // the first page's earlier metrics.
+  const METRICS = new Set(['firstContentfulPaint', 'largestContentfulPaint::Candidate', 'MarkDOMContent', 'MarkLoad', 'LayoutShift']);
+  const anchor = evs.find((v) => METRICS.has(v.name));
   let nav = null;
-  if (navs.length) {
-    if (fcps.length) {
-      const before = navs.filter((n) => n.ts <= fcps[0].ts);
-      nav = before.length ? before[before.length - 1] : navs[0];
-    } else nav = navs[0];
+  if (anchor) {
+    const before = allNavs.filter((n) => n.ts <= anchor.ts);
+    nav = before.length ? before[before.length - 1] : null;
+  } else if (navs.length) {
+    nav = navs[0];
   }
   // Every metric belongs to the chosen navigation: from it up to (not
   // including) the next one, so a later page's paints or an earlier page's
   // layout shifts never mix in.
-  const nextNav = nav ? navs.find((n) => n.ts > nav.ts) : null;
+  const nextNav = nav ? allNavs.find((n) => n.ts > nav.ts) : null;
   const navEnd = nextNav ? nextNav.ts : Infinity;
   const after = (list) => (nav ? list.filter((v) => v.ts >= nav.ts && v.ts < navEnd) : list);
+  const fcps = of('firstContentfulPaint');
   const rows = [];
   const row = (metric, ts, detail, value = null) => {
     rows.push({
@@ -66,7 +77,7 @@ export function compute(ctx) {
       detail,
     });
   };
-  if (nav) row('Navigation start', nav.ts, nav.url ? shortUrl(nav.url) : '');
+  if (nav && ctx.inWin(nav.ts)) row('Navigation start', nav.ts, nav.url ? shortUrl(nav.url) : '');
   const fcp = after(fcps)[0];
   if (fcp) row('First Contentful Paint', fcp.ts, '');
   const lcps = after(of('largestContentfulPaint::Candidate'));

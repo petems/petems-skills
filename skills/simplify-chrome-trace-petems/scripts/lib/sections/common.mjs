@@ -42,17 +42,44 @@ export function ms(us) {
 }
 
 /**
- * Predicate for process-level records (network, WebSocket): true when the
- * pid belongs to a different renderer than the scope, i.e. another tab or
- * an out-of-process iframe. Browser and service processes are kept, since
- * Chrome may emit a page's own navigation requests there. `--thread all`
- * keeps everything.
+ * Decide which process-level records (network requests, WebSocket events)
+ * belong to the analysed page.
+ *
+ * - Records from the scope's own renderer process are kept.
+ * - Records from any other renderer (another tab, an out-of-process iframe)
+ *   are dropped.
+ * - Records from browser or service processes can belong to any tab, so they
+ *   are kept only when their `frame` is one of the page's frames (the main
+ *   frame ids from the trace, plus frames seen on the page renderer's own
+ *   records). Unattributable ones are dropped and counted, so the section can
+ *   say so.
+ * - `--thread all` keeps everything.
+ *
+ * @param {any} ctx
+ * @param {{pid:any, frame?:string}[]} records
+ * @returns {{keep:(r:any)=>boolean, omitted:()=>number}}
  */
-export function otherRendererFilter(ctx) {
-  if (ctx.scope.all) return () => false;
-  const others = new Set();
-  for (const t of ctx.threadByKey.values()) {
-    if (t.name === 'CrRendererMain' && !ctx.scopePids.has(t.pid)) others.add(t.pid);
-  }
-  return (pid) => others.has(pid);
+export function pageRecordFilter(ctx, records) {
+  if (ctx.scope.all) return { keep: () => true, omitted: () => 0 };
+  const renderers = new Set();
+  for (const t of ctx.threadByKey.values()) if (t.name === 'CrRendererMain') renderers.add(t.pid);
+  const pageFrames = new Set(ctx.mainFrame.frameIds);
+  for (const r of records) if (ctx.scopePids.has(r.pid) && r.frame) pageFrames.add(r.frame);
+  let omitted = 0;
+  return {
+    keep(r) {
+      if (ctx.scopePids.has(r.pid)) return true;
+      if (renderers.has(r.pid)) return false;
+      if (r.frame && pageFrames.has(r.frame)) return true;
+      omitted++;
+      return false;
+    },
+    omitted: () => omitted,
+  };
+}
+
+/** One-line note for records dropped because they could not be tied to the page. */
+export function omittedNote(n, what) {
+  if (!n) return '';
+  return `${n} ${what} from the browser or a service process could not be tied to this page and ${n === 1 ? 'was' : 'were'} omitted (use --thread all to include them).`;
 }
