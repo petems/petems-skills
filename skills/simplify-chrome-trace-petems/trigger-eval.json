@@ -1,0 +1,18 @@
+[
+  {"query": "here's a performance trace from devtools, Trace-20261117T182954.json, what's making the page slow?", "should_trigger": true},
+  {"query": "I recorded the Performance panel while opening the menu, can you tell me why it janks? ~/Desktop/Trace-20261117.json.gz", "should_trigger": true},
+  {"query": "find the long tasks in this chrome trace", "should_trigger": true},
+  {"query": "which JS functions are hottest in trace.json? it's 300MB so don't open it directly", "should_trigger": true},
+  {"query": "this trace has traceEvents and a cpu profile, what runs too often?", "should_trigger": true},
+  {"query": "why is the click handler laggy? I saved a devtools recording of it", "should_trigger": true},
+  {"query": "what was the network doing between 60 and 70 seconds in my performance trace", "should_trigger": true},
+  {"query": "/simplify-chrome-trace-petems ~/Downloads/Trace.json", "should_trigger": true},
+  {"query": "run a lighthouse audit on https://example.com", "should_trigger": false},
+  {"query": "record a new performance trace of the homepage with chrome devtools mcp", "should_trigger": false},
+  {"query": "explain what Total Blocking Time means", "should_trigger": false},
+  {"query": "analyse this Datadog APM trace for the checkout service", "should_trigger": false},
+  {"query": "summarise this OpenTelemetry trace export", "should_trigger": false},
+  {"query": "take a heap snapshot and find the memory leak", "should_trigger": false},
+  {"query": "this python stack trace keeps showing up, what's wrong?", "should_trigger": false},
+  {"query": "pretty-print this 2KB json file", "should_trigger": false}
+]

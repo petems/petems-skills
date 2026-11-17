@@ -41,6 +41,11 @@
       "name": "conference-talk-builder-petems",
       "source": "./",
       "description": "Build conference talk outlines and MARP slides using the Story Circle framework"
+    },
+    {
+      "name": "simplify-chrome-trace-petems",
+      "source": "./",
+      "description": "Summarise large Chrome DevTools performance traces into compact markdown reports"
     }
   ]
 }

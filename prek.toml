@@ -17,3 +17,9 @@ rev = "v0.48.0"
 hooks = [
   { id = "markdownlint", args = ["--fix"] },
 ]
+
+[[repos]]
+repo = "local"
+hooks = [
+  { id = "simplify-chrome-trace-tests", name = "simplify-chrome-trace-petems tests", entry = "node --test skills/simplify-chrome-trace-petems/tests/*.test.mjs", language = "system", files = "^skills/simplify-chrome-trace-petems/", pass_filenames = false },
+]

@@ -1,0 +1,133 @@
+// summary: header block.
+
+import { fmtMs, fmtCount, fmtPct, round3 } from '../format.mjs';
+import { overlap } from '../nesting.mjs';
+import { aggregateSamples } from '../profile.mjs';
+import { threadLabel, threadShort } from '../threads.mjs';
+import { ms } from './common.mjs';
+
+export const TBT_THRESHOLD_US = 50000;
+
+/** Task stats over scope threads (tasks overlapping the window). */
+export function taskStats(ctx) {
+  let count = 0;
+  let busyUs = 0;
+  let over50 = 0;
+  let tbtUs = 0;
+  const { start, end } = ctx.win;
+  for (const th of ctx.scope.threads) {
+    const nest = ctx.nests.get(th.key);
+    for (const t of ctx.tasks.get(th.key)) {
+      if (t.artifact) continue;
+      const inside = t.dur > 0 ? overlap(t.ts, t.end, start, end) > 0 : t.ts >= start && t.ts <= end;
+      if (!inside) continue;
+      count++;
+      let b = overlap(t.ts, t.end, start, end);
+      const arts = nest.artifactIntervals.get(t.index);
+      if (arts) for (const [s, e] of arts) b -= overlap(s, e, start, end);
+      busyUs += Math.max(0, b);
+      if (t.effDur > TBT_THRESHOLD_US) {
+        over50++;
+        tbtUs += t.effDur - TBT_THRESHOLD_US;
+      }
+    }
+  }
+  return { count, busyMs: ms(busyUs), over50, tbtMs: ms(tbtUs) };
+}
+
+function countInWindow(ctx) {
+  const ts = ctx.model.ts;
+  const { start, end } = ctx.win;
+  let n = 0;
+  for (let i = 0; i < ts.length; i++) if (ts[i] >= start && ts[i] <= end) n++;
+  return n;
+}
+
+export function compute(ctx) {
+  const profiles = [];
+  for (const pt of ctx.prof.threads.values()) {
+    const a = aggregateSamples(ctx.prof, pt, ctx.win.start, ctx.win.end);
+    const th = ctx.threadByKey.get(pt.key);
+    profiles.push({
+      thread: th ? threadShort(th) : pt.key,
+      pid: pt.pid,
+      tid: pt.tid,
+      inScope: ctx.scopeKeys.has(pt.key),
+      samples: a.count,
+      spanMs: a.count ? ms(a.last - a.first) : 0,
+      busyMs: ms(a.sampled - a.idle),
+      idleMs: ms(a.idle),
+      programMs: ms(a.program),
+      gcMs: ms(a.gc),
+    });
+  }
+  profiles.sort((x, y) => Number(y.inScope) - Number(x.inScope) || y.busyMs - x.busyMs || (x.thread < y.thread ? -1 : x.thread > y.thread ? 1 : 0));
+  const tasks = taskStats(ctx);
+  const busyPct = ctx.scopeMs > 0 ? round3((tasks.busyMs / ctx.scopeMs) * 100) : 0;
+  return {
+    file: ctx.fileName,
+    fileSize: ctx.fileSize,
+    eventCount: ctx.model.eventCount,
+    source: (ctx.metadata && ctx.metadata.source) || null,
+    startTime: (ctx.metadata && ctx.metadata.startTime) || null,
+    spanMs: ms(ctx.traceEnd - ctx.origin),
+    window: ctx.win.set
+      ? {
+          startMs: round3(ctx.off(ctx.scopeStart)),
+          endMs: round3(ctx.off(ctx.scopeEnd)),
+          durationMs: round3(ctx.scopeMs),
+          source: ctx.win.source,
+          eventCount: countInWindow(ctx),
+        }
+      : null,
+    mainThreads: ctx.scope.threads.map((t) => ({ label: threadLabel(t), pid: t.pid, tid: t.tid, name: t.name })),
+    threadReason: ctx.scope.reason,
+    profiles,
+    tasks: { ...tasks, busyPct, scopeMs: round3(ctx.scopeMs) },
+  };
+}
+
+function fmtSize(bytes) {
+  if (bytes === null || bytes === undefined) return null;
+  if (bytes >= 1024 * 1024) return `${fmtMs(bytes / (1024 * 1024))} MB`;
+  return `${fmtMs(bytes / 1024)} KB`;
+}
+
+export function md(d, report) {
+  const lines = [`# Trace summary: ${d.file}`, ''];
+  const size = fmtSize(d.fileSize);
+  lines.push(`- File: ${size ? size + ', ' : ''}${fmtCount(d.eventCount)} events`);
+  if (d.source || d.startTime) {
+    const parts = [];
+    if (d.source) parts.push(`source ${d.source}`);
+    if (d.startTime) parts.push(`started ${d.startTime}`);
+    lines.push(`- Recording: ${parts.join(', ')}`);
+  }
+  lines.push(`- Span: ${fmtMs(d.spanMs)} ms`);
+  if (d.window) {
+    lines.push(
+      `- Window (${d.window.source}): ${fmtMs(d.window.startMs)}-${fmtMs(d.window.endMs)} ms (${fmtMs(d.window.durationMs)} ms, ${fmtCount(d.window.eventCount)} events)`,
+    );
+  }
+  if (d.mainThreads.length === 0) lines.push(`- Main thread: none (${d.threadReason})`);
+  else {
+    const names = d.mainThreads.map((t) => t.label).join('; ');
+    lines.push(`- Main thread${d.mainThreads.length > 1 ? 's' : ''}: ${names}, chosen by ${d.threadReason}`);
+  }
+  if (d.profiles.length === 0) lines.push('- CPU profile: none');
+  for (const p of d.profiles) {
+    lines.push(
+      `- CPU profile ${p.thread} (${p.pid}:${p.tid}): sampled ${fmtMs(p.spanMs)} ms, busy ${fmtMs(p.busyMs)} ms, idle ${fmtMs(p.idleMs)} ms, program ${fmtMs(p.programMs)} ms, GC ${fmtMs(p.gcMs)} ms`,
+    );
+  }
+  const t = d.tasks;
+  lines.push(
+    `- Main-thread tasks in scope: ${fmtCount(t.count)} tasks, busy ${fmtMs(t.busyMs)} ms (${fmtPct(t.busyPct)} of ${fmtMs(t.scopeMs)} ms), ${fmtCount(t.over50)} over 50 ms, TBT (all tasks in scope) ${fmtMs(t.tbtMs)} ms`,
+  );
+  const warnings = (report && report.warnings) || [];
+  if (warnings.length) {
+    lines.push('- Warnings:');
+    for (const w of warnings) lines.push(`  - ${w}`);
+  }
+  return lines.join('\n');
+}

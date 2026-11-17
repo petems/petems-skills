@@ -13,6 +13,7 @@ These are mostly just a matter of taste for me, as they're generally just slight
 | [peloton-invoice-download-petems](skills/peloton-invoice-download-petems/SKILL.md)   | Download and verify Peloton membership invoice PDFs via Chrome DevTools                 |
 | [prek-setup-petems](skills/prek-setup-petems/SKILL.md)                               | Set up prek git hooks with sensible defaults and language-specific linters              |
 | [three-phone-bill-download-petems](skills/three-phone-bill-download-petems/SKILL.md) | Download and verify a Three UK bill PDF via Chrome DevTools                             |
+| [simplify-chrome-trace-petems](skills/simplify-chrome-trace-petems/SKILL.md)         | Summarise large Chrome DevTools performance traces into compact markdown reports        |
 | [blog-post-writer-petems](skills/blog-post-writer-petems/SKILL.md)                   | Transform brain dumps into blog posts in Peter's casual, self-deprecating British voice |
 | [conference-talk-builder-petems](skills/conference-talk-builder-petems/SKILL.md)     | Build conference talk outlines and MARP slides using the Story Circle framework         |
 
