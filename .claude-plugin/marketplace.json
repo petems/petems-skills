@@ -20,7 +20,7 @@
     {
       "name": "hyperoptic-bill-download-petems",
       "source": "./",
-      "description": "Download and verify Hyperoptic broadband bill PDFs via Chrome DevTools browser automation"
+      "description": "Download and verify Hyperoptic broadband bill PDFs via the bundled hyperoptic-bill CLI (Patchright)"
     },
     {
       "name": "three-phone-bill-download-petems",
@@ -30,7 +30,7 @@
     {
       "name": "peloton-invoice-download-petems",
       "source": "./",
-      "description": "Download and verify Peloton membership invoice PDFs via Chrome DevTools"
+      "description": "Download and verify Peloton membership invoice PDFs via the bundled peloton-invoice CLI (Patchright)"
     },
     {
       "name": "blog-post-writer-petems",

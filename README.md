@@ -9,10 +9,10 @@ These are mostly just a matter of taste for me, as they're generally just slight
 | Skill                                                                                | Description                                                                             |
 |--------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------|
 | [git-commit-and-push-petems](skills/git-commit-and-push-petems/SKILL.md)             | Commit and push with Peter's conventional commit format                                 |
-| [hyperoptic-bill-download-petems](skills/hyperoptic-bill-download-petems/SKILL.md)   | Download and verify Hyperoptic broadband bill PDFs via Chrome DevTools                  |
-| [peloton-invoice-download-petems](skills/peloton-invoice-download-petems/SKILL.md)   | Download and verify Peloton membership invoice PDFs via Chrome DevTools                 |
+| [hyperoptic-bill-download-petems](skills/hyperoptic-bill-download-petems/SKILL.md)   | Download and verify Hyperoptic broadband bill PDFs via the bundled hyperoptic-bill CLI  |
+| [peloton-invoice-download-petems](skills/peloton-invoice-download-petems/SKILL.md)   | Download and verify Peloton membership invoice PDFs via the bundled peloton-invoice CLI |
 | [prek-setup-petems](skills/prek-setup-petems/SKILL.md)                               | Set up prek git hooks with sensible defaults and language-specific linters              |
-| [three-phone-bill-download-petems](skills/three-phone-bill-download-petems/SKILL.md) | Download and verify a Three UK bill PDF via the bundled three-bill CLI (Patchright)     |
+| [three-phone-bill-download-petems](skills/three-phone-bill-download-petems/SKILL.md) | Download and verify a Three UK bill PDF via the bundled three-bill CLI                  |
 | [blog-post-writer-petems](skills/blog-post-writer-petems/SKILL.md)                   | Transform brain dumps into blog posts in Peter's casual, self-deprecating British voice |
 | [conference-talk-builder-petems](skills/conference-talk-builder-petems/SKILL.md)     | Build conference talk outlines and MARP slides using the Story Circle framework         |
 
@@ -22,6 +22,21 @@ Works with any agent that supports [Agent Skills](https://agentskills.io) (Claud
 npx skills add petems/petems-skills
 # or if you just want one skill
 npx skills add petems/petems-skills@git-commit-and-push-petems
+```
+
+## Browser skills
+
+The bill and invoice skills each bundle a small Python CLI that drives its own
+[Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-python)
+Chromium on a dedicated profile. You sign in once yourself with
+`<tool> login`; the skill never sees your password. They share
+[`packages/skill-browser`](packages/skill-browser), and need
+[uv](https://docs.astral.sh/uv/):
+
+```bash
+uv tool install --editable skills/three-phone-bill-download-petems/three-bill
+three-bill install-browser
+three-bill login
 ```
 
 ## License
