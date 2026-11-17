@@ -15,7 +15,7 @@ The tool is read-only. It never modifies the trace.
 
 ## Runtime constraints
 
-* Node.js 18 or newer, ES modules (`.mjs`), **zero npm dependencies** (only
+* Node.js 22 or newer, ES modules (`.mjs`), **zero npm dependencies** (only
   `node:` built-ins). The skill must work straight after `npx skills add`.
 * Entry point: `scripts/simplify-chrome-trace.mjs`. Library code lives in
   `scripts/lib/`. Tests live in `tests/` and run with `node --test`.

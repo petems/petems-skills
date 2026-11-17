@@ -9,7 +9,7 @@
     "simplify-chrome-trace": "scripts/simplify-chrome-trace.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "scripts": {
     "test": "node --test tests/*.test.mjs"

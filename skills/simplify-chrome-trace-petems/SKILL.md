@@ -20,7 +20,7 @@ DevTools traces are tens to hundreds of MB of JSON. Never `Read` or `cat` the
 raw trace. Run the script, read the few-KB report, then ask narrower follow-up
 questions with flags.
 
-The script is read-only, has no npm dependencies (Node 18+), streams the file
+The script is read-only, has no npm dependencies (Node 22+), streams the file
 (so traces bigger than V8's ~512 MB string limit still work) and reads
 `.json.gz` directly.
 
