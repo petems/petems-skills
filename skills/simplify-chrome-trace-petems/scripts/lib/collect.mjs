@@ -52,7 +52,7 @@ export class TraceCollector {
     this.userTiming = [];
     this.timeStamps = [];
     this.eventTimings = [];
-    this.network = new Map();
+    this.network = []; // compact Resource* events, assembled in finish()
     this.websocket = [];
     this.nonObjects = 0;
   }
@@ -273,58 +273,132 @@ export class TraceCollector {
     this.vitals.push(rec);
   }
 
+  // Network events are buffered as compact records and assembled in finish(),
+  // once thread names say which processes are renderers. Chrome request ids
+  // are only unique per process, so two renderers (tabs) may reuse one; but a
+  // single request can also span processes (the browser emits a navigation's
+  // send, the renderer its response), so a bare pid|id key would split it.
   _network(ev) {
     const d = (ev.args && ev.args.data) || {};
     const id = d.requestId;
     if (id === undefined) return;
-    let r = this.network.get(id);
-    if (r === undefined) {
-      r = {
-        requestId: id,
-        pid: ev.pid,
-        frame: '',
-        url: '',
-        method: '',
-        priority: '',
-        sendTs: null,
-        responseTs: null,
-        finishTs: null,
-        status: null,
-        mimeType: '',
-        fromCache: false,
-        fromServiceWorker: false,
-        didFail: false,
-        finishBytes: null,
-        dataBytes: 0,
-      };
-      this.network.set(id, r);
-    }
-    if (!r.frame && typeof d.frame === 'string') r.frame = d.frame;
+    const e = { pid: ev.pid, name: ev.name, ts: ev.ts, requestId: id, frame: typeof d.frame === 'string' ? d.frame : '' };
     switch (ev.name) {
       case 'ResourceSendRequest':
-        if (r.sendTs === null) r.sendTs = ev.ts;
-        if (d.url) r.url = d.url;
-        if (d.requestMethod) r.method = d.requestMethod;
-        if (d.priority) r.priority = d.priority;
+        e.url = d.url;
+        e.method = d.requestMethod;
+        e.priority = d.priority;
         break;
       case 'ResourceReceiveResponse':
-        r.responseTs = ev.ts;
-        if (d.statusCode !== undefined) r.status = d.statusCode;
-        if (d.mimeType) r.mimeType = d.mimeType;
-        if (d.fromCache) r.fromCache = true;
-        if (d.fromServiceWorker) r.fromServiceWorker = true;
+        e.status = d.statusCode;
+        e.mimeType = d.mimeType;
+        e.fromCache = !!d.fromCache;
+        e.fromServiceWorker = !!d.fromServiceWorker;
         break;
       case 'ResourceReceivedData':
-        if (typeof d.encodedDataLength === 'number') r.dataBytes += d.encodedDataLength;
-        break;
       case 'ResourceFinish':
-        r.finishTs = ev.ts;
-        if (typeof d.encodedDataLength === 'number') r.finishBytes = d.encodedDataLength;
-        if (d.didFail) r.didFail = true;
+        e.bytes = d.encodedDataLength;
+        e.didFail = !!d.didFail;
         break;
       default:
         break;
     }
+    this.network.push(e);
+  }
+
+  /**
+   * Assemble request records. Each renderer's events for a request id form
+   * their own record. Events from other processes (browser, network service)
+   * join the renderer record whose frame matches theirs, else the only
+   * renderer record for that id; with no renderer record they share one
+   * record (as before), and when ambiguous they stay a separate record.
+   */
+  _buildNetwork(renderers) {
+    const groupKey = (e) => `${e.pid}|${e.requestId}`;
+    const groupFrame = new Map(); // pid|id -> first frame seen
+    const byId = new Map(); // requestId -> Map(renderer pid -> first frame)
+    for (const e of this.network) {
+      const gk = groupKey(e);
+      if (e.frame && !groupFrame.has(gk)) groupFrame.set(gk, e.frame);
+    }
+    for (const e of this.network) {
+      if (!renderers.has(e.pid)) continue;
+      let m = byId.get(e.requestId);
+      if (m === undefined) byId.set(e.requestId, (m = new Map()));
+      if (!m.has(e.pid)) m.set(e.pid, groupFrame.get(groupKey(e)) || '');
+    }
+    const owner = new Map(); // pid|id -> record key (owning pid or 'shared')
+    const ownerOf = (e) => {
+      const gk = groupKey(e);
+      let o = owner.get(gk);
+      if (o !== undefined) return o;
+      const m = byId.get(e.requestId);
+      if (renderers.has(e.pid)) o = e.pid;
+      else if (!m) o = 'shared';
+      else {
+        const f = groupFrame.get(gk);
+        const hit = f ? [...m].find(([, rf]) => rf === f) : undefined;
+        if (hit) o = hit[0];
+        else if (m.size === 1) o = [...m.keys()][0];
+        else o = e.pid;
+      }
+      owner.set(gk, o);
+      return o;
+    };
+    const records = new Map();
+    for (const e of this.network) {
+      const o = ownerOf(e);
+      const key = `${o}|${e.requestId}`;
+      let r = records.get(key);
+      if (r === undefined) {
+        r = {
+          requestId: e.requestId,
+          pid: o === 'shared' ? e.pid : o,
+          frame: '',
+          url: '',
+          method: '',
+          priority: '',
+          sendTs: null,
+          responseTs: null,
+          finishTs: null,
+          status: null,
+          mimeType: '',
+          fromCache: false,
+          fromServiceWorker: false,
+          didFail: false,
+          finishBytes: null,
+          dataBytes: 0,
+        };
+        records.set(key, r);
+      }
+      if (!r.frame && e.frame) r.frame = e.frame;
+      switch (e.name) {
+        case 'ResourceSendRequest':
+          if (r.sendTs === null) r.sendTs = e.ts;
+          if (e.url) r.url = e.url;
+          if (e.method) r.method = e.method;
+          if (e.priority) r.priority = e.priority;
+          break;
+        case 'ResourceReceiveResponse':
+          r.responseTs = e.ts;
+          if (e.status !== undefined) r.status = e.status;
+          if (e.mimeType) r.mimeType = e.mimeType;
+          if (e.fromCache) r.fromCache = true;
+          if (e.fromServiceWorker) r.fromServiceWorker = true;
+          break;
+        case 'ResourceReceivedData':
+          if (typeof e.bytes === 'number') r.dataBytes += e.bytes;
+          break;
+        case 'ResourceFinish':
+          r.finishTs = e.ts;
+          if (typeof e.bytes === 'number') r.finishBytes = e.bytes;
+          if (e.didFail) r.didFail = true;
+          break;
+        default:
+          break;
+      }
+    }
+    return [...records.values()];
   }
 
   _timeStamp(ev) {
@@ -422,7 +496,7 @@ export class TraceCollector {
       userTiming: this.userTiming,
       timeStamps: this.timeStamps,
       eventTimings: this.eventTimings,
-      network: [...this.network.values()],
+      network: this._buildNetwork(new Set(this.threadList.filter((t) => t.name === 'CrRendererMain').map((t) => t.pid))),
       websocket: this.websocket,
       warnings,
     };

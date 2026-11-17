@@ -344,6 +344,14 @@ first-category tokens (`cat` split on `,`) by self time, for completeness.
 
 Requests reconstructed from `ResourceSendRequest`, `ResourceReceiveResponse`,
 `ResourceReceivedData`, `ResourceFinish` keyed by `args.data.requestId`.
+Chrome request ids are only unique per process, so each renderer (a process
+with a `CrRendererMain` thread) gets its own record for an id; two tabs that
+reuse an id never merge. One request can still span processes (the browser
+may emit a navigation's send while the renderer emits its response), so
+events from a non-renderer process join the renderer record for that id
+whose `frame` matches, else the only renderer record for that id. With no
+renderer record for the id they share one record; when ambiguous they form
+their own record, owned by their process.
 Captured: url, method, priority, offset, TTFB (response - send), duration
 (finish - send), encoded size (from finish `encodedDataLength`, else summed
 `ResourceReceivedData`), status, mimeType, `fromCache`/`fromServiceWorker`,

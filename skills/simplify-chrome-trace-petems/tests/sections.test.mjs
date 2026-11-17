@@ -316,6 +316,33 @@ describe('network', () => {
     assert.equal(section(b.events, 'network', { thread: 'all' }).rows.length, 5);
   });
 
+  it('keeps a request id reused by another renderer separate', () => {
+    const b = new TraceBuilder().mainThread().threadName(200, 1, 'CrRendererMain');
+    b.x('RunTask', BASE, ms(1));
+    b.request({ requestId: 'dup', url: 'https://page.test/a', sendTs: BASE + ms(1), responseTs: BASE + ms(11), finishTs: BASE + ms(31), finishBytes: 4096, frame: 'PAGE' });
+    b.request({ requestId: 'dup', url: 'https://other-tab.test/secret', sendTs: BASE + ms(2), responseTs: BASE + ms(50), finishTs: BASE + ms(300), finishBytes: 9999, status: 404, method: 'POST', pid: 200, frame: 'OTHER' });
+    const d = section(b.events, 'network');
+    assert.deepEqual(d.rows.map((r) => [r.url, r.ttfbMs, r.durMs, r.sizeKB, r.status, r.method]), [['https://page.test/a', 10, 30, 4, 200, 'GET']]);
+    assert.ok(!render(analyze(b.events, { sections: ['network'] })).includes('other-tab.test'));
+    const all = section(b.events, 'network', { thread: 'all' });
+    assert.deepEqual(all.rows.map((r) => [r.url, r.ttfbMs, r.durMs, r.status]), [['https://page.test/a', 10, 30, 200], ['https://other-tab.test/secret', 48, 298, 404]]);
+  });
+
+  it('joins a browser-sent request to the renderer with the same id and frame', () => {
+    const b = new TraceBuilder().mainThread().threadName(200, 1, 'CrRendererMain').threadName(1, 1, 'CrBrowserMain');
+    b.x('RunTask', BASE, ms(1));
+    // Navigation: the browser emits the send, the page renderer the rest.
+    b.instant('ResourceSendRequest', BASE + ms(1), { pid: 1, args: { data: { requestId: 'nav', url: 'https://page.test/doc', requestMethod: 'GET', frame: 'PAGE' } } });
+    b.instant('ResourceReceiveResponse', BASE + ms(21), { args: { data: { requestId: 'nav', frame: 'PAGE', statusCode: 200, mimeType: 'text/html' } } });
+    b.instant('ResourceFinish', BASE + ms(41), { args: { data: { requestId: 'nav', encodedDataLength: 2048 } } });
+    // Another tab's renderer happens to reuse the id.
+    b.request({ requestId: 'nav', url: 'https://other-tab.test/secret', sendTs: BASE + ms(2), responseTs: BASE + ms(5), finishTs: BASE + ms(9), status: 500, pid: 200, frame: 'OTHER' });
+    const d = section(b.events, 'network');
+    assert.deepEqual(d.rows.map((r) => [r.url, r.ttfbMs, r.durMs, r.sizeKB, r.status]), [['https://page.test/doc', 20, 40, 2, 200]]);
+    assert.equal(d.omitted, '');
+    assert.equal(section(b.events, 'network', { thread: 'all' }).rows.length, 2);
+  });
+
   it('builds rollup, sizes, TTFB and truncates long URLs', () => {
     const long = 'https://cdn.example.com/' + 'a'.repeat(150) + '/end.js';
     const b = new TraceBuilder().mainThread();
