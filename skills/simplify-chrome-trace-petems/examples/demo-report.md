@@ -5,7 +5,7 @@
 - File: 1.1 MB, 87,222 events
 - Recording: source record-demo-trace.mjs, started 2026-11-17T21:38:50.664Z
 - Span: 10085.6 ms
-- Main thread: CrRendererMain (pid 31077, tid 12039599), chosen by every CrRendererMain thread (no main frame info in trace)
+- Main thread: CrRendererMain (pid 31077, tid 12039599), chosen by the only CrRendererMain thread (no main frame info in trace)
 - CPU profile CrRendererMain (31077:12039599): sampled 9625.8 ms, busy 3755.0 ms, idle 5870.8 ms, program 1033.0 ms, GC 2.0 ms
 - Main-thread tasks in scope: 3,426 tasks, busy 3732.5 ms (37.0% of 10085.6 ms), 3 over 50 ms, TBT (all tasks in scope) 2519.7 ms
 - Warnings:

@@ -86,7 +86,7 @@ describe('CLI (child process)', () => {
   });
 
   it('usage errors exit 2 with one line and a --help hint', () => {
-    for (const args of [['x.json', '--bogus'], ['x.json', '--top', 'zero'], ['x.json', '--only', 'nope'], ['x.json', '--window', '9-1'], []]) {
+    for (const args of [['x.json', '--bogus'], ['x.json', '--top', 'zero'], ['x.json', '--only', 'nope'], ['x.json', '--window', '9-1'], ['x.json', '--bucket', '1e-12'], ['x.json', '--bucket=0.5'], []]) {
       const r = run(...args);
       assert.equal(r.status, 2, args.join(' '));
       const lines = r.stderr.trim().split('\n');

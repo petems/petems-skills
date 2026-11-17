@@ -6,6 +6,24 @@ import { emptyBlock, heading } from './common.mjs';
 export const QUIET_PCT = 5;
 
 /**
+ * Upper bound on timeline buckets. The count comes from the trace span, which
+ * a single outlier timestamp can make enormous, so it is capped before any
+ * allocation; the bucket widens instead.
+ */
+export const MAX_BUCKETS = 2000;
+
+/** Smallest 1-2-5 x 10^k ms bucket that keeps `spanMs` within MAX_BUCKETS. Pure. */
+export function fitBucketMs(spanMs, requestedMs) {
+  if (Math.ceil(spanMs / requestedMs) <= MAX_BUCKETS) return requestedMs;
+  const need = spanMs / MAX_BUCKETS;
+  let mag = 10 ** Math.floor(Math.log10(need));
+  for (;;) {
+    for (const m of [1, 2, 5]) if (m * mag >= need && m * mag >= requestedMs) return m * mag;
+    mag *= 10;
+  }
+}
+
+/**
  * A task's effective intervals (µs): the task minus any nested profiler
  * artifact intervals, in time order.
  * @param {{ts:number,end:number}} t
@@ -95,10 +113,15 @@ export function compute(ctx) {
   if (ctx.scope.threads.length === 0 || ctx.traceEnd <= ctx.origin) {
     return { rows: [], bucketMs: ctx.options.bucketMs, note: 'No main-thread tasks to place on a timeline.' };
   }
-  const bucketMs = ctx.options.bucketMs;
-  const bucketUs = bucketMs * 1000;
+  const requestedMs = ctx.options.bucketMs;
   const spanUs = ctx.traceEnd - ctx.origin;
+  const bucketMs = fitBucketMs(spanUs / 1000, requestedMs);
+  const bucketUs = bucketMs * 1000;
   const count = Math.max(1, Math.ceil(spanUs / bucketUs));
+  const widened =
+    bucketMs !== requestedMs
+      ? `Bucket widened from ${fmtBound(requestedMs)} ms to ${fmtBound(bucketMs)} ms to keep the timeline within ${MAX_BUCKETS.toLocaleString('en-US')} buckets (trace span ${fmtBound(round3(spanUs / 1000))} ms).`
+      : null;
   const busy = bucketize(busyIntervals(ctx), ctx.origin, bucketUs, count);
   const buckets = [];
   for (let b = 0; b < count; b++) {
@@ -115,7 +138,7 @@ export function compute(ctx) {
       inWindow: ctx.win.set && bs < ctx.win.end && be > ctx.win.start,
     });
   }
-  return { rows: collapseQuiet(buckets), bucketMs, windowSet: ctx.win.set };
+  return { rows: collapseQuiet(buckets), bucketMs, requestedBucketMs: requestedMs, widened, windowSet: ctx.win.set };
 }
 
 export function md(d) {
@@ -130,5 +153,5 @@ export function md(d) {
     if (d.windowSet) cells.push(r.inWindow ? '<- window' : '');
     return cells;
   });
-  return `${heading(title)}\n\n${mdTable(headers, rows)}`;
+  return [heading(title), mdTable(headers, rows), d.widened].filter(Boolean).join('\n\n');
 }

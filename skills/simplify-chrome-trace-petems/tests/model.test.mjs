@@ -4,6 +4,7 @@ import { buildNesting, topLevelTasks, overlap } from '../scripts/lib/nesting.mjs
 import { collectEvents } from '../scripts/lib/collect.mjs';
 import { detectMainThreads, resolveThreads } from '../scripts/lib/threads.mjs';
 import { UserError } from '../scripts/lib/errors.mjs';
+import { analyze, render } from '../scripts/lib/analyze.mjs';
 import { TraceBuilder, BASE, PID, TID } from './helpers/fixtures.mjs';
 
 const ev = (name, ts, dur) => ({ name, cat: 'c', ts, dur });
@@ -139,10 +140,57 @@ describe('main thread detection', () => {
     assert.deepEqual(detectMainThreads(collectEvents(c.events)).threads.map((t) => t.pid), [300]);
   });
 
-  it('3: every CrRendererMain when there is no frame info', () => {
-    const r = detectMainThreads(collectEvents(base().events));
-    assert.deepEqual(r.threads.map((t) => t.pid).sort(), [200, 300]);
-    assert.match(r.reason, /every CrRendererMain/);
+  it('3: with no frame info, picks the busiest CrRendererMain and warns (never combines tabs)', () => {
+    const b = base();
+    b.x('Busy', BASE + 10, 5000, { pid: 300, tid: 7 });
+    const r = detectMainThreads(collectEvents(b.events));
+    assert.deepEqual(r.threads.map((t) => t.pid), [300]);
+    assert.match(r.reason, /busiest CrRendererMain/);
+    assert.equal(r.warnings.length, 1);
+    assert.match(r.warnings[0], /2 renderer main threads \(pids 200, 300\).*analysed the busiest \(pid 300, tid 7\).*--thread pid:tid/);
+    const one = new TraceBuilder().threadName(200, 5, 'CrRendererMain').x('X', BASE, 1, { pid: 200, tid: 5 });
+    assert.deepEqual(detectMainThreads(collectEvents(one.events)).warnings, [], 'a single renderer needs no warning');
+  });
+
+  it('multi-tab trace: picks one top-level frame and warns, never both', () => {
+    const b = base();
+    b.tracingStarted([
+      { frame: 'TAB1', processId: 200, isOutermostMainFrame: true, url: 'https://inspected.test/' },
+      { frame: 'TAB2', processId: 300, isOutermostMainFrame: true, url: 'https://other-tab.test/secret' },
+    ]);
+    const r = detectMainThreads(collectEvents(b.events));
+    assert.deepEqual(r.threads.map((t) => t.pid), [200], 'first listed frame only');
+    assert.match(r.warnings[0], /2 top-level frames \(renderer pids 200, 300\); analysed the first listed \(pid 200\)/);
+    assert.ok(!r.warnings[0].includes('other-tab.test'), 'warning never exposes the other tab URL');
+  });
+
+  it('multi-tab trace: the primary main frame settles it without a warning', () => {
+    const b = base();
+    b.tracingStarted([
+      { frame: 'TAB1', processId: 200, isOutermostMainFrame: true },
+      { frame: 'TAB2', processId: 300, isOutermostMainFrame: true, isInPrimaryMainFrame: true },
+    ]);
+    const r = detectMainThreads(collectEvents(b.events));
+    assert.deepEqual(r.threads.map((t) => t.pid), [300]);
+    assert.deepEqual(r.warnings, []);
+  });
+
+  it('multi-tab trace: the other tab stays out of tasks, functions and network', () => {
+    const b = base();
+    b.tracingStarted([
+      { frame: 'TAB1', processId: 200, isOutermostMainFrame: true },
+      { frame: 'TAB2', processId: 300, isOutermostMainFrame: true },
+    ]);
+    b.x('RunTask', BASE + 100, 80_000, { pid: 200, tid: 5 });
+    b.x('OtherTabWork', BASE + 100, 90_000, { pid: 300, tid: 7 });
+    b.request({ requestId: 'a', url: 'https://inspected.test/', sendTs: BASE + 200, pid: 200, tid: 5, frame: 'TAB1' });
+    b.request({ requestId: 'b', url: 'https://other-tab.test/secret', sendTs: BASE + 300, pid: 300, tid: 7, frame: 'TAB2' });
+    b.request({ requestId: 'c', url: 'https://other-tab.test/via-browser', sendTs: BASE + 400, pid: 1, tid: 1, frame: 'TAB2' });
+    const out = render(analyze(b.events, { sections: ['summary', 'longtasks', 'events', 'network'] }), { format: 'md' });
+    assert.ok(!out.includes('other-tab.test'), 'no URL from the other tab anywhere in the report');
+    assert.ok(!out.includes('OtherTabWork'));
+    assert.match(out, /inspected\.test/);
+    assert.match(out, /analysed the first listed/);
   });
 
   it('4: CrBrowserMain when there is no renderer', () => {

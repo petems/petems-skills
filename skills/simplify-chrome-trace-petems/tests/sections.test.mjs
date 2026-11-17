@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { analyze, render } from '../scripts/lib/analyze.mjs';
-import { bucketize, collapseQuiet } from '../scripts/lib/sections/timeline.mjs';
+import { bucketize, collapseQuiet, fitBucketMs, MAX_BUCKETS } from '../scripts/lib/sections/timeline.mjs';
 import { inpEstimate, groupInteractions } from '../scripts/lib/sections/interactions.mjs';
 import { clsSessions } from '../scripts/lib/sections/vitals.mjs';
 import { groupOf } from '../scripts/lib/sections/events.mjs';
@@ -129,6 +129,26 @@ describe('summary task stats', () => {
 });
 
 describe('timeline', () => {
+  it('fits the bucket to at most MAX_BUCKETS with a 1-2-5 size', () => {
+    assert.equal(fitBucketMs(88_000, 1000), 1000, 'untouched when it already fits');
+    assert.equal(fitBucketMs(88_000, 10), 50);
+    assert.equal(fitBucketMs(3e11, 1000), 200_000_000);
+    assert.ok(Math.ceil(3e11 / fitBucketMs(3e11, 1000)) <= MAX_BUCKETS);
+  });
+
+  it('survives an outlier timestamp years away with bounded buckets and a note', () => {
+    const b = new TraceBuilder().mainThread();
+    b.x('RunTask', BASE, ms(10));
+    b.x('Outlier', BASE + 10 * 365 * 24 * 3600 * 1e6, ms(1)); // ten years later
+    const started = Date.now();
+    const d = section(b.events, 'timeline');
+    assert.ok(Date.now() - started < 2000);
+    assert.ok(d.rows.length <= MAX_BUCKETS);
+    assert.ok(d.bucketMs > 1000);
+    assert.match(d.widened, /Bucket widened from 1000 ms to .* to keep the timeline within 2,000 buckets/);
+    assert.match(render(analyze(b.events, { sections: ['timeline'] }), { format: 'md' }), /Bucket widened/);
+  });
+
   it('splits a task across buckets and never exceeds 100%', () => {
     const busy = bucketize([[0, 2500], [2600, 2700]], 0, 1000, 3);
     assert.deepEqual([...busy], [1000, 1000, 600]);

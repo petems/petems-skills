@@ -103,7 +103,11 @@ export function parseArgs(argv) {
   const options = {};
   if (raw['--top'] !== undefined) options.top = positiveNumber('--top', raw['--top'], true);
   if (raw['--long-task-ms'] !== undefined) options.longTaskMs = positiveNumber('--long-task-ms', raw['--long-task-ms']);
-  if (raw['--bucket'] !== undefined) options.bucketMs = positiveNumber('--bucket', raw['--bucket']);
+  if (raw['--bucket'] !== undefined) {
+    options.bucketMs = positiveNumber('--bucket', raw['--bucket']);
+    // Timestamps are microseconds; sub-millisecond buckets only multiply rows.
+    if (options.bucketMs < 1) throw new UsageError(`--bucket must be at least 1 ms, got ${raw['--bucket']}`);
+  }
   if (raw['--window'] !== undefined) options.window = parseWindowSpec(raw['--window']);
   if (raw['--thread'] !== undefined) options.thread = raw['--thread'];
   if (raw['--match'] !== undefined) {

@@ -63,7 +63,7 @@ export function pageRecordFilter(ctx, records) {
   if (ctx.scope.all) return { keep: () => true, omitted: () => 0 };
   const renderers = new Set();
   for (const t of ctx.threadByKey.values()) if (t.name === 'CrRendererMain') renderers.add(t.pid);
-  const pageFrames = new Set(ctx.mainFrame.frameIds);
+  const pageFrames = new Set(ctx.mainFrame.treeFrameIds);
   for (const r of records) if (ctx.scopePids.has(r.pid) && r.frame) pageFrames.add(r.frame);
   let omitted = 0;
   return {

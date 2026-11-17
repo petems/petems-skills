@@ -12,22 +12,59 @@ export function threadShort(th) {
   return th.name || `${th.pid}:${th.tid}`;
 }
 
-/** Frame ids and pids of the outermost main frame(s). */
+/**
+ * The inspected page's root frame, its frame tree and its renderer pid(s).
+ *
+ * DevTools lists only the inspected tab's frame tree in
+ * TracingStartedInBrowser, but other recorders (chrome://tracing, hand-made
+ * traces) can list several tabs. Tabs are never combined: one root is chosen
+ * (the primary main frame if that settles it, else the first listed, which
+ * is the inspected tab's root in DevTools traces and what Lighthouse uses),
+ * and `ambiguous` records that a choice was made so the caller can warn.
+ *
+ * @returns {{frameIds:Set<string>, treeFrameIds:Set<string>, pids:Set<any>, ambiguous:null|{count:number, pids:any[]}}}
+ */
 export function mainFrameInfo(model) {
   const frames = model.frames || [];
-  let picked = frames.filter((f) => f.isOutermostMainFrame);
-  if (picked.length === 0) picked = frames.filter((f) => f.isInPrimaryMainFrame);
-  if (picked.length === 0) picked = frames.filter((f) => !f.parent);
-  const frameIds = new Set();
-  const pids = new Set();
-  for (const f of picked) {
-    if (f.frame !== undefined) frameIds.add(f.frame);
-    if (f.processId !== undefined) pids.add(f.processId);
+  let roots = frames.filter((f) => f.isOutermostMainFrame);
+  if (roots.length === 0) roots = frames.filter((f) => f.isInPrimaryMainFrame);
+  if (roots.length === 0) roots = frames.filter((f) => !f.parent);
+  let ambiguous = null;
+  if (roots.length > 1) {
+    const primary = roots.filter((f) => f.isInPrimaryMainFrame);
+    const candidates = primary.length > 0 ? primary : roots;
+    if (candidates.length > 1) {
+      ambiguous = { count: candidates.length, pids: [...new Set(candidates.map((f) => f.processId).filter((x) => x !== undefined))] };
+    }
+    roots = candidates.slice(0, 1);
   }
+  const root = roots[0];
+  const frameIds = new Set();
+  const treeFrameIds = new Set();
+  const pids = new Set();
+  if (root) {
+    if (root.frame !== undefined) frameIds.add(root.frame);
+    if (root.processId !== undefined) pids.add(root.processId);
+    // The root's iframes (any depth) belong to the same page.
+    const byParent = new Map();
+    for (const f of frames) {
+      if (!f.parent) continue;
+      if (!byParent.has(f.parent)) byParent.set(f.parent, []);
+      byParent.get(f.parent).push(f.frame);
+    }
+    const stack = [...frameIds];
+    while (stack.length) {
+      const id = stack.pop();
+      if (treeFrameIds.has(id)) continue;
+      treeFrameIds.add(id);
+      for (const c of byParent.get(id) || []) stack.push(c);
+    }
+  }
+  // Cross-process navigations of the same root frame stay on the same page.
   for (const fp of model.frameProcesses || []) {
     if (frameIds.has(fp.frame) && fp.processId !== undefined) pids.add(fp.processId);
   }
-  return { frameIds, pids };
+  return { frameIds, treeFrameIds, pids, ambiguous };
 }
 
 function withEventsFirst(list) {
@@ -35,36 +72,55 @@ function withEventsFirst(list) {
   return busy.length > 0 ? busy : list;
 }
 
+const PICK_HINT = 'Use --thread pid:tid to choose another, or --thread all to combine them.';
+
 /**
- * Pick the main thread(s).
- * @returns {{threads:any[], reason:string}}
+ * Pick the main thread(s) of one page. Never silently combines tabs: when
+ * the trace leaves a choice, one is picked and a warning says so.
+ * @returns {{threads:any[], reason:string, warnings:string[]}}
  */
 export function detectMainThreads(model) {
   const threads = model.threads;
-  const { pids } = mainFrameInfo(model);
+  const warnings = [];
+  const { pids, ambiguous } = mainFrameInfo(model);
   if (pids.size > 0) {
     const hit = threads.filter((t) => pids.has(t.pid) && t.name === 'CrRendererMain');
     if (hit.length > 0) {
+      if (ambiguous) {
+        warnings.push(
+          `trace lists ${ambiguous.count} top-level frames (renderer pids ${ambiguous.pids.join(', ')}); analysed the first listed (pid ${[...pids].join(', ')}). ${PICK_HINT}`,
+        );
+      }
       return {
         threads: withEventsFirst(hit),
         reason: `CrRendererMain of the main frame's renderer process (pid ${[...pids].join(', ')}) from TracingStartedInBrowser`,
+        warnings,
       };
     }
   }
-  const renderers = threads.filter((t) => t.name === 'CrRendererMain');
+  const renderers = withEventsFirst(threads.filter((t) => t.name === 'CrRendererMain'));
   if (renderers.length > 0) {
-    return { threads: withEventsFirst(renderers), reason: 'every CrRendererMain thread (no main frame info in trace)' };
+    if (renderers.length === 1) {
+      return { threads: renderers, reason: 'the only CrRendererMain thread (no main frame info in trace)', warnings };
+    }
+    // Several renderers and no frame info: likely several tabs. Pick the
+    // busiest rather than mixing them.
+    const busiest = renderers.reduce((a, t) => (t.durSum > a.durSum ? t : a));
+    warnings.push(
+      `trace has ${renderers.length} renderer main threads (pids ${renderers.map((t) => t.pid).join(', ')}) and no main frame info; analysed the busiest (pid ${busiest.pid}, tid ${busiest.tid}). ${PICK_HINT}`,
+    );
+    return { threads: [busiest], reason: 'the busiest CrRendererMain thread (no main frame info in trace)', warnings };
   }
   const browser = threads.filter((t) => t.name === 'CrBrowserMain');
   if (browser.length > 0) {
-    return { threads: withEventsFirst(browser), reason: 'CrBrowserMain (no renderer main thread found)' };
+    return { threads: withEventsFirst(browser), reason: 'CrBrowserMain (no renderer main thread found)', warnings };
   }
   let best = null;
   for (const t of threads) {
     if (t.durSum > 0 && (best === null || t.durSum > best.durSum)) best = t;
   }
-  if (best) return { threads: [best], reason: 'thread with the most duration-event time (no named main thread)' };
-  return { threads: [], reason: 'no thread with duration events found' };
+  if (best) return { threads: [best], reason: 'thread with the most duration-event time (no named main thread)', warnings };
+  return { threads: [], reason: 'no thread with duration events found', warnings };
 }
 
 /**

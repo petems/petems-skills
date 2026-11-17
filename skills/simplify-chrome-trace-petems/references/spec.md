@@ -73,13 +73,22 @@ The tool is read-only. It never modifies the trace.
 Most of the report is about the page's main thread, not every thread.
 Resolution order (follows Lighthouse's tracehouse approach):
 
-1. `TracingStartedInBrowser` event: `args.data.frames[]`, pick frames with
-   `isOutermostMainFrame` (or `isInPrimaryMainFrame`, or no `parent`), collect
-   their `processId`. Also honour later `FrameCommittedInBrowser` /
-   `ProcessReadyInBrowser` events for that frame id that carry a `processId`
-   (cross-process navigations).
-2. In each of those pids, the thread named `CrRendererMain`.
-3. Fallback: every `CrRendererMain` thread in the trace.
+Tabs are never combined silently: a trace can hold several tabs
+(chrome://tracing, other recorders, hand-made traces), and mixing them
+would blend unrelated work and URLs into one page's report.
+
+1. `TracingStartedInBrowser` event: `args.data.frames[]`, candidate roots
+   are frames with `isOutermostMainFrame` (or `isInPrimaryMainFrame`, or no
+   `parent`). Exactly one root is chosen: the primary main frame if that
+   settles it, otherwise the first listed (the inspected tab's root in
+   DevTools traces, and Lighthouse's choice), with a warning naming the
+   candidate pids (never their URLs) and pointing at `--thread`. The root's
+   frame tree (its iframes) is the page's frame set. Also honour later
+   `FrameCommittedInBrowser` / `ProcessReadyInBrowser` events for the root
+   frame id that carry a `processId` (cross-process navigations).
+2. In those pids, the thread named `CrRendererMain`.
+3. Fallback with no frame info: the only `CrRendererMain`; if there are
+   several, the busiest one, with a warning listing the pids.
 4. Fallback: `CrBrowserMain` (single-process Chrome).
 5. Fallback: the thread with the most `X`/`B`-`E` duration.
 
@@ -196,7 +205,11 @@ note, so the agent knows it was checked.
 
 ### timeline
 
-* Buckets of `--bucket MS` (default 1000) across the whole trace.
+* Buckets of `--bucket MS` (default 1000, at least 1) across the whole
+  trace. At most 2,000 buckets: the count comes from the trace span, which a
+  single outlier timestamp can make enormous, so when the span needs more the
+  bucket widens to the smallest 1-2-5 x 10^k ms size that fits, with a note
+  under the table. Nothing is allocated before this cap is applied.
 * Busy time per bucket = main-thread top-level task time **split across the
   buckets it spans**, so no bucket can exceed the bucket size.
 * Columns: `start (ms)`, `busy (ms)`, `busy %`, a bar of `#` characters

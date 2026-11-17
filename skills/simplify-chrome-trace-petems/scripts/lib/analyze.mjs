@@ -45,6 +45,7 @@ export function buildContext(model, load, options) {
   const traceEnd = model.maxEnd;
   const win = resolveWindow(opts.window, origin, metadata);
   const scope = resolveThreads(model, opts.thread);
+  if (scope.warnings) warnings.push(...scope.warnings);
   const scopeStart = Math.max(win.start, origin);
   const scopeEnd = Math.min(win.end, traceEnd);
   const winArg = win.set ? { start: win.start, end: win.end } : undefined;
