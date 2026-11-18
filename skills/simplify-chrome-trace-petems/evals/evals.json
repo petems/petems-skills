@@ -1,0 +1,41 @@
+{
+  "skill_name": "simplify-chrome-trace-petems",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Here's a DevTools trace at ~/Desktop/Trace.json.gz (about 35 MB). What's slow?",
+      "expected_output": "Runs the script on the .gz directly with --out to a temp file, reads the report rather than the trace, and reports the main thread, busy %, TBT, the worst long tasks with what they contain (inside / top JS columns), and the hottest functions with file:line. Never Reads or cats the raw trace.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "I recorded myself opening the command palette. Why does it take a second to appear? Trace is ./Trace-palette.json",
+      "expected_output": "Runs once for an overview, then --only timeline to locate the burst of activity, then re-runs with --window around it. Explains the action using the windowed tables (long tasks, interactions phases, categories) and cites offsets and durations from the report.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Typing in the editor feels laggy, here's a trace. Is it input delay or rendering?",
+      "expected_output": "Reads the interactions section, compares input delay, processing and presentation delay for the slowest keypress interactions, gives the INP estimate, and relates the dominant phase to long tasks or style/layout time.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "What were the websocket and network requests doing between 62s and 69s in trace.json? Only care about the /api/ URLs.",
+      "expected_output": "Runs with --only network,websocket --window 62000-69000 --match /api/ and summarises request timings (TTFB, duration, size, failures) and connection lifecycles. Suggests --wall-clock if the user wants to line up against server logs.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "Analyse the worker in this trace, not the main page. trace.json",
+      "expected_output": "Uses --thread with the worker's thread name (for example 'DedicatedWorker thread') and reports that thread's tasks and functions, noting that the header confirms which thread was analysed.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "Summarise this trace (simulate: the trace was recorded without JavaScript samples, so there is no CPU profile)",
+      "expected_output": "Reports the event-based sections, points out the 'no CPU profile' warning, and tells the user to re-record with JavaScript samples enabled to get function-level attribution. Does not invent function names.",
+      "files": []
+    }
+  ]
+}

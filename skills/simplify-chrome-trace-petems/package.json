@@ -1,0 +1,17 @@
+{
+  "name": "simplify-chrome-trace-petems",
+  "version": "1.0.0",
+  "description": "Summarise Chrome DevTools performance traces into compact markdown reports",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "bin": {
+    "simplify-chrome-trace": "scripts/simplify-chrome-trace.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  }
+}

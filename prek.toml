@@ -8,7 +8,8 @@ hooks = [
   { id = "check-json" },
   { id = "check-merge-conflict" },
   { id = "detect-private-key" },
-  { id = "check-added-large-files" },
+  # The recorded demo trace is a deliberate ~1.1 MB fixture.
+  { id = "check-added-large-files", exclude = "^skills/simplify-chrome-trace-petems/examples/demo-trace\\.json\\.gz$" },
 ]
 
 [[repos]]
@@ -16,4 +17,10 @@ repo = "https://github.com/igorshubovych/markdownlint-cli"
 rev = "v0.48.0"
 hooks = [
   { id = "markdownlint", args = ["--fix"] },
+]
+
+[[repos]]
+repo = "local"
+hooks = [
+  { id = "simplify-chrome-trace-tests", name = "simplify-chrome-trace-petems tests", entry = "node --test skills/simplify-chrome-trace-petems/tests/*.test.mjs", language = "system", files = "^skills/simplify-chrome-trace-petems/", pass_filenames = false },
 ]
