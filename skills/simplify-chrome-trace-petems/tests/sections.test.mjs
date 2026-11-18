@@ -1,13 +1,13 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { analyze, render } from '../scripts/lib/analyze.mjs';
+import { analyze, analyzeFile, buildContext, render } from '../scripts/lib/analyze.mjs';
 import { UserError } from '../scripts/lib/errors.mjs';
 import { bucketize, collapseQuiet, fitBucketMs, MAX_BUCKETS } from '../scripts/lib/sections/timeline.mjs';
 import { inpEstimate, groupInteractions } from '../scripts/lib/sections/interactions.mjs';
 import { clsSessions } from '../scripts/lib/sections/vitals.mjs';
 import { groupOf } from '../scripts/lib/sections/events.mjs';
 import { SECTION_KEYS } from '../scripts/lib/sections/index.mjs';
-import { TraceBuilder, BASE, richTrace } from './helpers/fixtures.mjs';
+import { TraceBuilder, BASE, richTrace, writeTemp } from './helpers/fixtures.mjs';
 import { collectEvents } from '../scripts/lib/collect.mjs';
 
 const section = (events, key, opts = {}) => analyze(events, { sections: [key], ...opts }).sections[0].data;
@@ -447,6 +447,52 @@ describe('network', () => {
     assert.deepEqual(d.rows.map((r) => r.url), ['https://tab2.test/own', 'https://tab2.test/via-browser']);
   });
 
+  it('--thread on another tab uses that tab\'s frame tree for vitals, network and WebSocket', () => {
+    const b = new TraceBuilder().mainThread(200, 7).mainThread(300, 7).threadName(1, 1, 'CrBrowserMain');
+    b.tracingStarted([
+      { frame: 'TAB1', processId: 200, isOutermostMainFrame: true },
+      { frame: 'TAB2', processId: 300, isOutermostMainFrame: true },
+    ]);
+    for (const [pid, frame, host] of [[200, 'TAB1', 'tab1.test'], [300, 'TAB2', 'tab2.test']]) {
+      const at = (name, t, data = {}) => b.instant(name, BASE + ms(t), { pid, tid: 7, cat: 'loading', args: { frame, data } });
+      b.x('RunTask', BASE, ms(1), { pid, tid: 7 });
+      at('navigationStart', pid === 200 ? 0 : 10, { documentLoaderURL: `https://${host}/`, isLoadingMainFrame: true });
+      at('firstContentfulPaint', pid === 200 ? 100 : 210);
+      b.request({ requestId: `${frame}-own`, url: `https://${host}/own`, sendTs: BASE + ms(pid === 200 ? 1 : 2), pid, tid: 7, frame });
+      b.request({ requestId: `${frame}-browser`, url: `https://${host}/via-browser`, sendTs: BASE + ms(pid === 200 ? 3 : 4), pid: 1, frame });
+      b.instant('WebSocketCreate', BASE + ms(5), { pid, tid: 7, args: { data: { identifier: 1, url: `wss://${host}/feed`, frame } } });
+    }
+    const opts = { thread: '300:7', sections: ['summary', 'vitals', 'network', 'websocket'] };
+    const vitals = section(b.events, 'vitals', { thread: '300:7' });
+    assert.equal(vitals.rows.find((r) => r.metric === 'Navigation start').detail, 'tab2.test/');
+    assert.equal(vitals.rows.find((r) => r.metric === 'First Contentful Paint').sinceNavMs, 200);
+    assert.deepEqual(section(b.events, 'network', { thread: '300:7' }).rows.map((r) => r.url), ['https://tab2.test/own', 'https://tab2.test/via-browser']);
+    assert.deepEqual(section(b.events, 'websocket', { thread: '300:7' }).connections.map((c) => c.url), ['wss://tab2.test/feed']);
+    const md = render(analyze(b.events, opts), { format: 'md' });
+    assert.match(md, /Main thread: CrRendererMain \(pid 300, tid 7\)/);
+    assert.ok(!md.includes('tab1.test'), 'nothing from the default tab');
+    // The default selection still shows the first listed tab only.
+    const def = render(analyze(b.events, { ...opts, thread: undefined }), { format: 'md' });
+    assert.match(def, /tab1\.test\/own/);
+    assert.match(def, /First Contentful Paint \| 100\.0 \| 100\.0/);
+    assert.ok(!def.includes('tab2.test'), 'nothing from the other tab');
+  });
+
+  it('--thread on a renderer with no listed frame falls back to the process, not the default tab', () => {
+    const b = new TraceBuilder().mainThread(200, 7).mainThread(300, 7).threadName(1, 1, 'CrBrowserMain');
+    b.tracingStarted([{ frame: 'TAB1', processId: 200, isOutermostMainFrame: true }]);
+    b.x('RunTask', BASE, ms(1), { pid: 300, tid: 7 });
+    b.instant('firstContentfulPaint', BASE + ms(50), { pid: 300, tid: 7, cat: 'loading', args: { frame: 'OTHER' } });
+    b.request({ requestId: 'a', url: 'https://tab1.test/via-browser', sendTs: BASE + ms(1), pid: 1, frame: 'TAB1' });
+    b.request({ requestId: 'b', url: 'https://other.test/own', sendTs: BASE + ms(2), pid: 300, tid: 7, frame: 'OTHER' });
+    b.request({ requestId: 'c', url: 'https://other.test/via-browser', sendTs: BASE + ms(3), pid: 1, frame: 'OTHER' });
+    const ctx = buildContext(collectEvents(b.events), {}, { thread: '300:7' });
+    assert.equal(ctx.mainFrame.frameIds.size, 0);
+    assert.equal(ctx.mainFrame.treeFrameIds.size, 0);
+    assert.deepEqual(section(b.events, 'network', { thread: '300:7' }).rows.map((r) => r.url), ['https://other.test/own', 'https://other.test/via-browser']);
+    assert.equal(section(b.events, 'vitals', { thread: '300:7' }).rows[0].metric, 'First Contentful Paint');
+  });
+
   it('with a known frame tree, keeps frameless and late-iframe requests unless the process hosts other frames', () => {
     const b = new TraceBuilder().mainThread();
     b.tracingStarted([{ frame: 'PAGE', processId: 100, isOutermostMainFrame: true }]);
@@ -680,6 +726,32 @@ describe('vitals', () => {
     assert.ok(d.rows.every((r) => r.sinceNavMs >= 0), 'no negative nav-relative times');
   });
 
+  it('with no frame list, uses isLoadingMainFrame to keep iframe navigations and metrics out', () => {
+    const b = new TraceBuilder().mainThread();
+    const at = (name, t, frame, data = {}) => b.instant(name, BASE + ms(t), { cat: 'loading', args: { frame, data } });
+    at('navigationStart', 0, 'MAIN', { documentLoaderURL: 'https://page.test/', isLoadingMainFrame: true });
+    at('navigationStart', 50, 'IFRAME', { documentLoaderURL: 'https://ads.test/frame', isLoadingMainFrame: false });
+    at('firstContentfulPaint', 100, 'MAIN');
+    const d = section(b.events, 'vitals');
+    assert.equal(d.rows.find((r) => r.metric === 'Navigation start').detail, 'page.test/');
+    assert.equal(d.rows.find((r) => r.metric === 'First Contentful Paint').sinceNavMs, 100);
+    assert.equal(d.navigations, 1, 'the iframe navigation is not counted');
+    // An iframe paint before the page's own is not the page's FCP either.
+    at('firstContentfulPaint', 60, 'IFRAME');
+    assert.equal(section(b.events, 'vitals').rows.find((r) => r.metric === 'First Contentful Paint').sinceNavMs, 100);
+  });
+
+  it('with no frame list or flags, keeps metrics to the chosen navigation\'s frame', () => {
+    const b = new TraceBuilder().mainThread();
+    const at = (name, t, frame, data = {}) => b.instant(name, BASE + ms(t), { cat: 'loading', args: { frame, data } });
+    at('navigationStart', 0, 'MAIN', { documentLoaderURL: 'https://page.test/' });
+    at('firstContentfulPaint', 100, 'MAIN');
+    at('largestContentfulPaint::Candidate', 150, 'MAIN', { size: 1 });
+    at('largestContentfulPaint::Candidate', 300, 'IFRAME', { size: 9 });
+    const lcp = section(b.events, 'vitals').rows.find((r) => r.metric === 'Largest Contentful Paint');
+    assert.equal(lcp.offsetMs, 150);
+  });
+
   it('reports nav-relative times and CLS session windows', () => {
     const d = section(richTrace().events, 'vitals');
     const fcp = d.rows.find((r) => r.metric === 'First Contentful Paint');
@@ -694,6 +766,41 @@ describe('vitals', () => {
     assert.ok(Math.abs(s.largest.score - 0.25) < 1e-9);
     const capped = clsSessions(Array.from({ length: 7 }, (_, i) => ({ ts: i * 900_000, score: 0.1 })));
     assert.equal(capped.largest.count, 6);
+  });
+});
+
+describe('warnings without the summary section', () => {
+  const twoTabs = () => {
+    const b = new TraceBuilder().mainThread(200, 7).mainThread(300, 7);
+    b.tracingStarted([
+      { frame: 'TAB1', processId: 200, isOutermostMainFrame: true },
+      { frame: 'TAB2', processId: 300, isOutermostMainFrame: true },
+    ]);
+    b.x('RunTask', BASE, ms(1), { pid: 200, tid: 7 });
+    b.request({ requestId: 'a', url: 'https://tab1.test/', sendTs: BASE + ms(1), pid: 200, tid: 7, frame: 'TAB1' });
+    return b;
+  };
+
+  it('lists the ambiguous tab choice under the notice for --only network', () => {
+    const md = render(analyze(twoTabs().events, { sections: ['network'] }), { format: 'md' });
+    const lines = md.split('\n');
+    assert.equal(lines[2], 'Warnings:');
+    assert.ok(lines.some((l) => /^- trace lists 2 top-level frames \(renderer pids 200, 300\); analysed the first listed/.test(l)), md);
+    assert.ok(md.indexOf('Warnings:') < md.indexOf('## Network'));
+  });
+
+  it('lists truncation warnings for --only network and --only timeline', async () => {
+    const path = writeTemp('cut.json', twoTabs().toJSON('truncated'));
+    for (const only of ['network', 'timeline']) {
+      const md = render(await analyzeFile(path, { sections: [only] }), { format: 'md' });
+      assert.match(md, /^Warnings:\n\n(- .*\n)*- trace is truncated/m, md);
+    }
+  });
+
+  it('is not repeated when the summary lists the warnings', () => {
+    const md = render(analyze(twoTabs().events, { sections: ['summary', 'network'] }), { format: 'md' });
+    assert.ok(!md.includes('\nWarnings:'));
+    assert.equal(md.split('trace lists 2 top-level frames').length, 2);
   });
 });
 

@@ -32,11 +32,24 @@ function fmtScore(x) {
 export function compute(ctx) {
   const frameIds = ctx.mainFrame.frameIds;
   const all = ctx.scope.all;
+  // Without a frame list (CDP recordings), the main frame comes from the
+  // navigations themselves: one with isLoadingMainFrame false is an
+  // iframe's and is never the page's navigation, and frames whose
+  // navigation says true are the main frame's.
+  const unknown = frameIds.size === 0;
+  const mainNavFrames = new Set();
+  if (unknown) {
+    for (const v of ctx.model.vitals) {
+      if (v.name === 'navigationStart' && v.isLoadingMainFrame === true && v.frame && (all || ctx.scopePids.has(v.pid))) mainNavFrames.add(v.frame);
+    }
+  }
   // Navigation choice uses the page's records regardless of the window: a
   // window can start after the navigation its paints belong to. Reported
   // metrics are then windowed.
   const scoped = ctx.model.vitals.filter((v) => {
     if (typeof v.ts !== 'number') return false;
+    if (unknown && v.name === 'navigationStart' && v.isLoadingMainFrame === false) return false;
+    if (unknown && mainNavFrames.size > 0 && v.frame && !mainNavFrames.has(v.frame)) return false;
     if (all) return true;
     if (!ctx.scopePids.has(v.pid)) return false;
     if (frameIds.size > 0 && v.frame && !frameIds.has(v.frame)) return false;
@@ -67,7 +80,10 @@ export function compute(ctx) {
   // layout shifts never mix in.
   const nextNav = nav ? allNavs.find((n) => n.ts > nav.ts) : null;
   const navEnd = nextNav ? nextNav.ts : Infinity;
-  const after = (list) => (nav ? list.filter((v) => v.ts >= nav.ts && v.ts < navEnd) : list);
+  // With no frame list, a navigation's frame is the page's: metrics from
+  // other frames (iframes, or another tab in the process) stay out.
+  const sameFrame = (v) => !unknown || !nav || !nav.frame || !v.frame || v.frame === nav.frame;
+  const after = (list) => (nav ? list.filter((v) => v.ts >= nav.ts && v.ts < navEnd && sameFrame(v)) : list);
   const fcps = of('firstContentfulPaint');
   const rows = [];
   const row = (metric, ts, detail, value = null) => {

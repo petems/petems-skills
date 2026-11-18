@@ -33,6 +33,28 @@ export function asyncId(ev) {
   return '';
 }
 
+export const MAX_ID_LENGTH = 64;
+
+/**
+ * Normalise a pid, tid or frame processId once, when collected. Chrome
+ * writes numbers, which are kept as they are. Anything else (a string or
+ * object in a hand-made trace) becomes short cleaned text, so every later
+ * use (thread keys, labels, warnings, --thread matching) sees the same
+ * value and none can break a report line. `undefined` stays undefined.
+ */
+export function normId(v) {
+  if (v === undefined || (typeof v === 'number' && Number.isFinite(v))) return v;
+  let s;
+  try {
+    s = typeof v === 'string' ? v : JSON.stringify(v);
+  } catch {
+    s = '';
+  }
+  return [...cleanText(s ?? '')].slice(0, MAX_ID_LENGTH).join('');
+}
+
+const isPlainId = (v) => v === undefined || (typeof v === 'number' && Number.isFinite(v));
+
 export class TraceCollector {
   constructor() {
     this.eventCount = 0;
@@ -96,6 +118,7 @@ export class TraceCollector {
       return;
     }
     this.eventCount++;
+    if (!isPlainId(ev.pid) || !isPlainId(ev.tid)) ev = { ...ev, pid: normId(ev.pid), tid: normId(ev.tid) };
     const ph = ev.ph;
     const name = ev.name;
     if (ph === 'M') {
@@ -269,6 +292,7 @@ export class TraceCollector {
       rec.nodeId = d.nodeId;
     } else if (ev.name === 'navigationStart') {
       rec.url = d.documentLoaderURL || '';
+      if (typeof d.isLoadingMainFrame === 'boolean') rec.isLoadingMainFrame = d.isLoadingMainFrame;
     }
     this.vitals.push(rec);
   }
@@ -425,7 +449,7 @@ export class TraceCollector {
       if (!f) continue;
       this.frames.push({
         frame: f.frame,
-        processId: f.processId,
+        processId: normId(f.processId),
         parent: f.parent,
         isOutermostMainFrame: !!f.isOutermostMainFrame,
         isInPrimaryMainFrame: !!f.isInPrimaryMainFrame,
@@ -442,7 +466,7 @@ export class TraceCollector {
     if (!d || d.frame === undefined) return;
     const parent = typeof d.parent === 'string' ? d.parent : undefined;
     if (d.processId === undefined && parent === undefined) return;
-    this.frameProcesses.push({ frame: d.frame, processId: d.processId, parent });
+    this.frameProcesses.push({ frame: d.frame, processId: normId(d.processId), parent });
   }
 
   _websocket(ev) {

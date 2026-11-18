@@ -8,7 +8,7 @@ import { buildProfiles } from './profile.mjs';
 import { resolveThreads, mainFrameInfo } from './threads.mjs';
 import { resolveWindow, parseWindowSpec, checkWindowOverlap } from './window.mjs';
 import { makeMatcher } from './match.mjs';
-import { makeUtc, joinBlocks, cleanText } from './format.mjs';
+import { makeUtc, joinBlocks, cleanText, mdText } from './format.mjs';
 import { SECTIONS, DEFAULT_SECTION_KEYS, SECTION_KEYS } from './sections/index.mjs';
 
 export const DEFAULT_OPTIONS = Object.freeze({
@@ -85,7 +85,9 @@ export function buildContext(model, load, options) {
     scope,
     scopeKeys: new Set(scope.threads.map((t) => t.key)),
     scopePids: new Set(scope.threads.map((t) => t.pid)),
-    mainFrame: mainFrameInfo(model),
+    // The selected page: an explicit --thread on another renderer gets that
+    // renderer's frame tree, so vitals, network and WebSocket agree with it.
+    mainFrame: scope.mainFrame || mainFrameInfo(model),
     nests,
     tasks,
     prof,
@@ -185,6 +187,12 @@ export function render(report, options = {}) {
     return JSON.stringify({ notice: UNTRUSTED_NOTICE, ...doc }, null, 2) + '\n';
   }
   const blocks = [`> ${UNTRUSTED_NOTICE}`];
+  // The summary lists the warnings; without it (--only network, say) they
+  // still go at the top, so truncation or a tab choice is never hidden.
+  const warnings = report.warnings || [];
+  if (warnings.length && !report.sections.some((s) => s.key === 'summary')) {
+    blocks.push(['Warnings:', '', ...warnings.map((w) => `- ${mdText(w)}`)].join('\n'));
+  }
   for (const s of report.sections) {
     const def = SECTIONS.find((d) => d.key === s.key);
     blocks.push(def.md(s.data, report));

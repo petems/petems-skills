@@ -73,11 +73,12 @@ export function pageRecordFilter(ctx, records) {
   for (const t of ctx.threadByKey.values()) if (t.name === 'CrRendererMain') renderers.add(t.pid);
   const tree = ctx.mainFrame.treeFrameIds;
   const treeKnown = tree.size > 0 && [...ctx.scopePids].some((p) => ctx.mainFrame.pids.has(p));
-  // Seed the page's frames from the tree only when it belongs to the scope:
-  // an explicit --thread on another tab's renderer must not inherit the
-  // default root's frames. A root with no known process cannot be tied to
-  // any renderer, so it is used only for the default selection.
-  const treeOwned = treeKnown || (ctx.mainFrame.pids.size === 0 && !ctx.options.thread);
+  // Seed the page's frames from the tree only when it belongs to the scope.
+  // An explicit --thread never carries another tab's tree (resolveThreads
+  // gives it its own root, or none), so a tree outside the scope's process
+  // is the default selection's fallback; a root with no known process can
+  // still be used there, since it cannot be tied to any renderer.
+  const treeOwned = treeKnown || ctx.mainFrame.pids.size === 0;
   const pageFrames = new Set(treeOwned ? tree : []);
   let shared = ctx.mainFrame.sharedRoots > 0;
   for (const r of records) {

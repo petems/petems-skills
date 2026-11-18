@@ -24,14 +24,27 @@ export function threadShort(th) {
  * Chrome can put several tabs in one renderer process, so `sharedRoots`
  * counts the other top-level frames listed in the chosen root's process(es).
  *
+ * With `inPids` (an explicit --thread on another renderer), only roots that
+ * live in those processes (listed there, or moved there by a later
+ * FrameCommittedInBrowser / ProcessReadyInBrowser) are candidates, so the
+ * selected tab gets its own frame tree. If none does, the frame sets are
+ * empty (process-only attribution), never the default tab's frames.
+ *
+ * @param {any} model
+ * @param {Set<any>} [inPids]
  * @returns {{frameIds:Set<string>, treeFrameIds:Set<string>, pids:Set<any>, ambiguous:null|{count:number, pids:any[]}, sharedRoots:number}}
  */
-export function mainFrameInfo(model) {
+export function mainFrameInfo(model, inPids) {
   const frames = model.frames || [];
   let roots = frames.filter((f) => f.isOutermostMainFrame);
   if (roots.length === 0) roots = frames.filter((f) => f.isInPrimaryMainFrame);
   if (roots.length === 0) roots = frames.filter((f) => !f.parent);
   const allRoots = roots;
+  if (inPids) {
+    const lives = (pid) => pid !== undefined && inPids.has(pid);
+    const moved = new Set((model.frameProcesses || []).filter((fp) => lives(fp.processId)).map((fp) => fp.frame));
+    roots = roots.filter((f) => lives(f.processId) || moved.has(f.frame));
+  }
   let ambiguous = null;
   if (roots.length > 1) {
     const primary = roots.filter((f) => f.isInPrimaryMainFrame);
@@ -72,6 +85,24 @@ export function mainFrameInfo(model) {
   return { frameIds, treeFrameIds, pids, ambiguous, sharedRoots };
 }
 
+function sharedRootsWarning(n, pids) {
+  return `${n} other top-level frame${n === 1 ? '' : 's'} (another tab) share${n === 1 ? 's' : ''} the analysed renderer process (pid ${[...pids].join(', ')}); network and WebSocket records are limited to this page's frames, but thread data (tasks, events, CPU profile, interactions, marks) cannot be split per tab and includes the other tab's work.`;
+}
+
+/**
+ * Page selection for an explicit --thread (name or pid:tid): the default
+ * root when the selected threads are in its process, else the root that
+ * lives in the selected process (or none). Never the default tab's frames
+ * for another renderer.
+ */
+function overrideScope(model, threads, reason) {
+  const pids = new Set(threads.map((t) => t.pid));
+  const def = mainFrameInfo(model);
+  const mainFrame = [...pids].some((p) => def.pids.has(p)) ? def : mainFrameInfo(model, pids);
+  const warnings = mainFrame.sharedRoots > 0 ? [sharedRootsWarning(mainFrame.sharedRoots, mainFrame.pids)] : [];
+  return { threads, reason, all: false, mainFrame, warnings };
+}
+
 function withEventsFirst(list) {
   const busy = list.filter((t) => t.events.length > 0);
   return busy.length > 0 ? busy : list;
@@ -96,11 +127,7 @@ export function detectMainThreads(model) {
           `trace lists ${ambiguous.count} top-level frames (renderer pids ${ambiguous.pids.join(', ')}); analysed the first listed (pid ${[...pids].join(', ')}). ${PICK_HINT}`,
         );
       }
-      if (sharedRoots > 0) {
-        warnings.push(
-          `${sharedRoots} other top-level frame${sharedRoots === 1 ? '' : 's'} (another tab) share${sharedRoots === 1 ? 's' : ''} the analysed renderer process (pid ${[...pids].join(', ')}); network and WebSocket records are limited to this page's frames, but thread data (tasks, events, CPU profile, interactions, marks) cannot be split per tab and includes the other tab's work.`,
-        );
-      }
+      if (sharedRoots > 0) warnings.push(sharedRootsWarning(sharedRoots, pids));
       return {
         threads: withEventsFirst(hit),
         reason: `CrRendererMain of the main frame's renderer process (pid ${[...pids].join(', ')}) from TracingStartedInBrowser`,
@@ -134,7 +161,8 @@ export function detectMainThreads(model) {
 }
 
 /**
- * Resolve the scope threads, honouring --thread.
+ * Resolve the scope threads, honouring --thread. An explicit name or
+ * pid:tid also returns `mainFrame`, the selected page's frame info.
  * @param {any} model
  * @param {string|undefined} opt
  */
@@ -152,7 +180,7 @@ export function resolveThreads(model, opt) {
     const tid = Number(m[2]);
     const hit = model.threads.filter((t) => t.pid === pid && t.tid === tid);
     if (hit.length === 0) throw new UserError(`no thread ${opt} in trace. Threads: ${availableThreads(model)}`);
-    return { threads: hit, reason: `--thread ${opt}`, all: false };
+    return overrideScope(model, hit, `--thread ${opt}`);
   }
   // Stored thread names are cleaned (see collect.mjs), so clean the
   // requested name the same way before comparing.
@@ -173,7 +201,7 @@ export function resolveThreads(model, opt) {
   }
   const threads = withEventsFirst(hit);
   const count = threads.length > 1 ? ` (${threads.length} threads in pid ${threads[0].pid})` : '';
-  return { threads, reason: `--thread "${opt}"${count}`, all: false };
+  return overrideScope(model, threads, `--thread "${opt}"${count}`);
 }
 
 function availableThreads(model) {

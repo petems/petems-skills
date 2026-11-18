@@ -78,6 +78,12 @@ The tool is read-only. It never modifies the trace.
 * Unclosed `B` events at end of trace are dropped with a warning count.
 * Thread and process names come from `M` events `thread_name` and
   `process_name` (`args.name`).
+* `pid` and `tid` (and frame `processId` values) are normalised once, when
+  collected: finite numbers (what Chrome writes) stay as they are; any other
+  value (a string or object in a hand-made trace) becomes cleaned text (see
+  Output formatting) capped at 64 characters, so thread keys, labels,
+  profile labels, warnings, errors and `--thread pid:tid` matching all see
+  the same value and none can break a report line.
 * **Trace origin (offset 0)**: smallest `ts` among non-metadata events with
   `ts > 0`. All "offset" values in the report are ms from this origin.
 * `metadata.startTime` (ISO string), when present, is the wall-clock time of
@@ -121,6 +127,16 @@ process (a thread pool, one page's workers) are combined; matches in more
 than one process would combine tabs, so the tool exits with an error
 listing their `pid:tid` values and asks for `--thread pid:tid` (or
 `--thread all`).
+
+A `--thread` name or `pid:tid` also selects the page: if the chosen
+threads are outside the default root's process(es), the root is chosen
+again (same rules) from the roots that live in the chosen process (listed
+there, or moved there by `FrameCommittedInBrowser` / `ProcessReadyInBrowser`),
+and its frame tree is the page's frame set for vitals, network and
+WebSocket. If no listed frame lives there, the page has no frame set
+(process-only attribution), never the default tab's frames. If other
+top-level frames share the chosen process, the same shared-renderer warning
+as above is given.
 
 ## Duration model and self time
 
@@ -249,7 +265,11 @@ note, so the agent knows it was checked.
   bound it by FCP/TTI). Busy time is the union of task intervals across
   scope threads clipped to the window, so busy % never exceeds 100% even
   with several threads in scope.
-* warnings list (truncated file, unpaired B events, no profile, etc.)
+* warnings list (truncated file, unpaired B events, no profile, etc.).
+  When the summary is not among the rendered sections (`--only network`,
+  say), the markdown report lists the warnings in a `Warnings:` block right
+  after the untrusted-data notice instead, so truncation or a tab choice is
+  never hidden. JSON always carries them in the top-level `warnings`.
 
 ### timeline
 
@@ -284,7 +304,12 @@ metric (paints, load markers, layout shifts) is bounded to that navigation,
 up to the next one, so another page's metrics never mix in. Reported metrics
 are windowed, and the navigation row appears only when it is in the window.
 A user `performance.measure()` named like a vital (`b`/`e`/`X` in
-`blink.user_timing`) is user timing, never a vital. If none exist (typical for a non-navigation
+`blink.user_timing`) is user timing, never a vital. With no frame list
+(CDP recordings), the main frame comes from the navigations: one with
+`isLoadingMainFrame: false` (an iframe's) is never the page's navigation,
+frames whose navigation says `true` are the main frame (metrics from other
+frames are dropped), and once a navigation is chosen only metrics from its
+frame (or with no frame) count. If no vitals exist (typical for a non-navigation
 recording), print the note.
 
 ### longtasks
