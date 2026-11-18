@@ -64,11 +64,20 @@ under `~/.<tool>/diagnostics/` and lists them in `details.diagnostics`.
 ## Releasing
 
 Standalone skill installs (`npx skills add petems/petems-skills@<skill>`)
-fetch this package from GitHub at the pinned tag. After merging a change here:
+fetch this package from GitHub at the pinned tag. Tags are created by the
+[`Tag skill-browser`](../../.github/workflows/tag-skill-browser.yml) workflow:
 
-1. Bump `version` in this `pyproject.toml` and `skill_browser/__init__.py`.
-2. Tag the merge commit `skill-browser-v<version>` and push the tag.
-3. Bump the tag in each CLI's dependency line when it needs the new version.
+1. In the PR that changes this package, bump `version` in this
+   `pyproject.toml` and `__version__` in `skill_browser/__init__.py`
+   (`X.Y.Z`; the workflow fails if they differ).
+2. Merge it. The workflow sees `pyproject.toml` change on `master` and pushes
+   `skill-browser-v<version>` on the merge commit. A pyproject change without
+   a version bump creates no tag.
+3. Bump the tag in each CLI's dependency line when it needs the new version
+   (after the tag exists, or a standalone install of that CLI will fail).
+
+To re-run it by hand, use **Actions > Tag skill-browser > Run workflow** on
+`master`.
 
 ## Develop
 

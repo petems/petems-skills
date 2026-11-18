@@ -48,8 +48,9 @@ not as a script of `mcp__chrome-devtools__*` calls. `three-bill`,
   workspace members.
 - **Dependency.** Depend on `skill-browser` by git URL pinned to a
   `skill-browser-v*` tag, so the skill still installs when copied on its own.
-  When `packages/skill-browser` changes, bump its version and push a new tag
-  after merge (see its README).
+  When `packages/skill-browser` changes, bump its version (pyproject and
+  `__version__`) in the same PR; on merge to `master` the `Tag skill-browser`
+  workflow creates the tag (see its README).
 - **One profile per tool** at `~/.<tool>/profile`, guarded by the shared
   `flock` lease. Never point a tool at the user's everyday Chrome, never use a
   remote-debugging port, and never delete lock files.

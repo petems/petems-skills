@@ -1,0 +1,81 @@
+# Tag skill-browser releases from its version number.
+#
+# Each skill CLI depends on skill-browser by a git URL pinned to a
+# skill-browser-v<version> tag, so a skill installed on its own can fetch it.
+# When a merge to master changes packages/skill-browser/pyproject.toml, this
+# reads its version and creates that tag on the merged commit if it does not
+# exist yet. Bump the version in the PR that changes the package; merging it
+# releases it. A pyproject change without a version bump is a no-op.
+#
+# Tags pushed with GITHUB_TOKEN do not start other workflow runs, so this
+# cannot loop.
+name: Tag skill-browser
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - packages/skill-browser/pyproject.toml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tag-skill-browser
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the merged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Read and check the version
+        id: version
+        run: |
+          python3 - <<'EOF'
+          import os, re, sys, tomllib
+          from pathlib import Path
+
+          pkg = Path("packages/skill-browser")
+          version = tomllib.loads((pkg / "pyproject.toml").read_text())["project"]["version"]
+          if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+              sys.exit(f"::error::skill-browser version {version!r} is not X.Y.Z")
+          init = (pkg / "skill_browser" / "__init__.py").read_text()
+          match = re.search(r'__version__\s*=\s*"([^"]+)"', init)
+          if not match or match.group(1) != version:
+              found = match.group(1) if match else "missing"
+              sys.exit(
+                  f"::error::skill_browser/__init__.py has __version__ {found}, "
+                  f"pyproject.toml has {version}. Bump both together."
+              )
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"tag=skill-browser-v{version}\n")
+          print(f"skill-browser version {version}")
+          EOF
+
+      - name: Create the tag if it is new
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if existing=$(git ls-remote --exit-code --tags origin "refs/tags/${TAG}"); then
+            echo "::notice::${TAG} already exists (${existing%%[[:space:]]*}); nothing to do. Bump the version to release."
+            echo "${TAG} already exists; no new release." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "skill-browser ${TAG#skill-browser-v}" "${SHA}"
+          git push origin "refs/tags/${TAG}"
+          echo "::notice::Created ${TAG} at ${SHA}"
+          {
+            echo "Created \`${TAG}\` at \`${SHA}\`."
+            echo
+            echo "Skill CLIs pinned to this tag can now install standalone."
+          } >> "$GITHUB_STEP_SUMMARY"
