@@ -24,3 +24,11 @@ repo = "local"
 hooks = [
   { id = "simplify-chrome-trace-tests", name = "simplify-chrome-trace-petems tests", entry = "node --test skills/simplify-chrome-trace-petems/tests/*.test.mjs", language = "system", files = "^skills/simplify-chrome-trace-petems/", pass_filenames = false },
 ]
+
+[[repos]]
+repo = "https://github.com/astral-sh/ruff-pre-commit"
+rev = "v0.11.11"
+hooks = [
+  { id = "ruff", args = ["--fix"] },
+  { id = "ruff-format" },
+]

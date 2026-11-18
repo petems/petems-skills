@@ -1,11 +1,15 @@
 # Peloton account invoices API (frozen snapshot)
 
-**Last verified: 2026-11-04** against a UK All-Access (hardware) membership on
-`account.onepeloton.com`.
+**Last verified: 2026-11-17** by a live `peloton-invoice login` and
+`download --latest` against a UK All-Access (hardware) membership on
+`account.onepeloton.com` (Auth0 token, GraphQL, a dashed-UUID invoice id, the
+receipt page, and `page.pdf()` printing a one-page A4 receipt of about 89 KB).
 
-This file is the contract the skill depends on. When the skill breaks,
-regenerate it by loading the membership page in DevTools, watching the network
-panel, and updating both this file and `SKILL.md` steps 3 to 6 together.
+This file is the contract the `peloton-invoice` CLI depends on. The checks that
+enforce it live in `peloton-invoice/peloton_invoice/contract.py` (pure,
+unit-tested) and the browser calls in `peloton-invoice/peloton_invoice/account.py`.
+When the CLI breaks (exit 5), regenerate this file (see Update procedure) and
+change those modules with it.
 
 ## Sites
 
@@ -38,14 +42,14 @@ panel, and updating both this file and `SKILL.md` steps 3 to 6 together.
 | Name | Format | Source |
 | --- | --- | --- |
 | Subscription ID | UUID with dashes (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`) | `subPelotonMember.subscriptions[].id`. Also in the "Membership details" link |
-| Invoice ID | 32 lowercase hex chars, no dashes | `subPelotonSubscription.pastInvoices[].id`. Also in each "View" link |
+| Invoice ID | 32 lowercase hex chars (older invoices) or a lowercase dashed UUID (newer, seen live 2026-11-17) | `subPelotonSubscription.pastInvoices[].id`. Also in each "View" link |
 
 ## GraphQL operations
 
 ### List subscriptions
 
-The app's own operation is `MembershipAnalyticsData`. The skill uses a
-trimmed equivalent:
+The app's own operation is `MembershipAnalyticsData`. The CLI uses a
+trimmed equivalent (`contract.SUBS_QUERY`):
 
 ```graphql
 query Subs($input: SubPelotonMemberInput!) {
@@ -83,8 +87,8 @@ values come from the app's own filter list.
 
 ### Payment history
 
-The app's operation name is `PaymentHistory`. The skill requests a subset of
-its fields:
+The app's operation name is `PaymentHistory`. The CLI requests a subset of
+its fields (`contract.HISTORY_QUERY`):
 
 ```graphql
 query PaymentHistory($input: SubPelotonSubscriptionInput!) {
@@ -107,7 +111,7 @@ Observed entry:
 
 ```jsonc
 {
-  "id": "<32-hex>",
+  "id": "<32-hex or dashed UUID>",
   "createdAt": "2026-10-07T19:10:49.000Z",
   "invoicePayments": [{
     "label": "Amex 1234", "paymentType": "CREDIT_CARD",
@@ -152,7 +156,8 @@ came from.
 
 ### Offline capture hardening
 
-The skill prints a captured copy, not the live page. Before serialising it:
+The CLI prints a captured copy, not the live page (`account._CAPTURE`). Before
+serialising it, the capture:
 
 - removes `script`, `noscript`, frames, `object`, `embed`, `link`, `style`,
   `meta`, `base`, `form`, and known tracker and consent elements;
@@ -166,31 +171,37 @@ same as the unhardened copy). Fonts load via the inlined `@import` from
 
 ### Rendered PDF (reference)
 
-Headless Chrome print of the captured HTML: 1 page A4, about 94 KB, text
-extractable with `pdftotext`. A blank render is 872 bytes.
+Headless print of the captured HTML: 1 page A4, about 94 KB, text extractable
+with `pdftotext`. A blank render is 872 bytes, so the CLI rejects anything under
+20,000 bytes (`pdf_too_small`). The CLI prints with `page.pdf()` in a
+throwaway, profile-less headless Chromium launched from the same Patchright
+driver, so the profile's cookies never reach the render.
 
-## MCP tool constraints
+## How the CLI talks to the site
 
-- `evaluate_script` `args` accepts element uids only. Inline values as literals.
-- `evaluate_script` `filePath` output is JSON-encoded. Decode with `json.load` before use.
-- `evaluate_script` `filePath` and `sourcePath` are sandboxed to the workspace
-  roots (`/tmp` is rejected for both, verified 2026-11-04). The receipt capture therefore lands in the project
-  directory, which is why the skill moves it to `/tmp` immediately and cleans up
-  on every exit path.
-- A `~` inside double quotes is not expanded by the shell. Resolve save paths
-  to absolute before building commands.
-- `get_network_request` prints full request headers, including the bearer token
-  and cookies. Avoid it on authenticated Peloton requests.
-- The MCP Chrome runs with `--remote-debugging-pipe`, so there is no CDP port
-  to drive `Page.printToPDF` from outside. Print with a separate headless Chrome.
+- The token is read from `localStorage` (keys filtered by prefix and audience)
+  and chosen in Python by `contract.pick_token`, which skips stale entries.
+  It is held in a Python variable and passed to the in-page GraphQL `fetch` as
+  an `evaluate` argument. It is never printed, logged or put in diagnostics.
+- GraphQL runs as an in-page `fetch` from the account origin, as the app does
+  (the gateway allows it via CORS). Timeout 20 seconds.
+- The receipt opens in its own tab in the same context and is closed in a
+  `finally`. The CLI waits for "Total amount paid", then checks the page shows
+  "Peloton Interactive", "VAT ID Number", the payment date and the amount
+  before capturing (`receipt_mismatch` otherwise).
+- Diagnostics record request paths and statuses for the GraphQL and API hosts
+  only, and take no screenshot, because the receipt shows a name and address.
 
 ## Update procedure
 
 If the skill fails with `*_shape_changed`, `*_graphql_error`, or a blank PDF:
 
 1. Open `https://account.onepeloton.co.uk/mymembership` in a regular browser and log in.
-2. DevTools, Network, filter `graphql`. Open "Membership details".
+2. DevTools (or the Chrome DevTools MCP, for investigation only), Network, filter `graphql`. Open "Membership details".
 3. Find the `PaymentHistory` operation and compare its query and response with this file.
 4. Click a "View" receipt link and compare the URL pattern and page text.
-5. Update this file and the matching JavaScript in `SKILL.md` together.
-6. Re-run the skill end-to-end before committing.
+5. Update this file, `contract.py` (and `account.py` if the page flow moved)
+   together, with matching unit tests and changes to the fake site in
+   `tests/test_browser_fake_peloton.py`.
+6. Re-run `peloton-invoice download --latest` against the live site before
+   committing.

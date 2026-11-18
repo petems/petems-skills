@@ -1,0 +1,102 @@
+"""Typed errors, each with its own exit code.
+
+Every skill CLI built on skill-browser shares these codes, so a SKILL.md can
+branch on the exit code alone. The cases a skill must tell apart (no session,
+profile busy, site contract changed, nothing to download) never share one.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+EXIT_OK = 0
+EXIT_UNEXPECTED = 1
+EXIT_USAGE = 2
+EXIT_NOT_LOGGED_IN = 3
+EXIT_PROFILE_BUSY = 4
+EXIT_CONTRACT_CHANGED = 5
+EXIT_NOT_FOUND = 6
+EXIT_PDF_INVALID = 7
+EXIT_SHUTDOWN_UNCONFIRMED = 8
+EXIT_API_ERROR = 9
+EXIT_OUTPUT_EXISTS = 10
+
+
+class SkillError(Exception):
+    """Base error. ``code`` is a stable machine-readable name."""
+
+    exit_code = EXIT_UNEXPECTED
+    code = "error"
+
+    def __init__(self, message: str, *, code: str | None = None, **details: Any):
+        super().__init__(message)
+        if code is not None:
+            self.code = code
+        self.details = details
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "error": self.code,
+            "message": str(self),
+            "exit_code": self.exit_code,
+            **({"details": self.details} if self.details else {}),
+        }
+
+
+class NotLoggedInError(SkillError):
+    """No usable session in the profile. The human runs ``<tool> login``."""
+
+    exit_code = EXIT_NOT_LOGGED_IN
+    code = "not_logged_in"
+
+
+class LoginTimeoutError(SkillError):
+    exit_code = EXIT_NOT_LOGGED_IN
+    code = "login_timeout"
+
+
+class ProfileBusyError(SkillError):
+    exit_code = EXIT_PROFILE_BUSY
+    code = "profile_busy"
+
+
+class ContractChangedError(SkillError):
+    """A page or response no longer has the shape the skill's references document."""
+
+    exit_code = EXIT_CONTRACT_CHANGED
+    code = "contract_changed"
+
+
+class InvalidIdentifierError(ContractChangedError):
+    code = "invalid_identifier"
+
+
+class NotFoundError(SkillError):
+    """The thing asked for (a bill, an invoice) does not exist. ``details`` lists what does."""
+
+    exit_code = EXIT_NOT_FOUND
+    code = "not_found"
+
+
+class PdfInvalidError(SkillError):
+    exit_code = EXIT_PDF_INVALID
+    code = "pdf_invalid"
+
+
+class ShutdownUnconfirmedError(SkillError):
+    exit_code = EXIT_SHUTDOWN_UNCONFIRMED
+    code = "browser_shutdown_unconfirmed"
+
+
+class ApiError(SkillError):
+    """The site answered with an unexpected status (404, 5xx) or not at all."""
+
+    exit_code = EXIT_API_ERROR
+    code = "api_error"
+
+
+class OutputExistsError(SkillError):
+    """The destination file exists and ``--overwrite`` was not given."""
+
+    exit_code = EXIT_OUTPUT_EXISTS
+    code = "output_exists"
