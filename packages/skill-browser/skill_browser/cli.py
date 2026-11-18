@@ -209,9 +209,16 @@ def run(
         return install_browser()
     if validate:
         validate(args, parser)
-    secure_mkdir(args.home)
 
     try:
+        try:
+            secure_mkdir(args.home)
+        except OSError as exc:
+            raise SkillError(
+                f"Cannot use {args.home} as the state directory "
+                f"({exc.strerror or type(exc).__name__}).",
+                code="home_unusable",
+            ) from exc
         asyncio.run(handlers[args.command](args))
     except SkillError as exc:
         print(json.dumps(exc.as_dict(), indent=2, default=str), file=sys.stderr)

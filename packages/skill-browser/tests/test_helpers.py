@@ -321,3 +321,174 @@ async def test_wait_off_barrier_tolerates_a_bounce():
 
     page.url = "https://idp.example/auth"
     assert await wait_off_barrier(page, barrier, timeout=0.1, poll=0.02) == "off-site"
+
+
+# -- review findings (Copilot) -------------------------------------------------
+
+
+def test_unusable_home_is_a_json_error_not_a_traceback(tmp_path, capsys):
+    home = tmp_path / "a-file"
+    home.write_text("not a directory")
+
+    async def get(_args):
+        raise AssertionError("must not run")
+
+    code = cli.run(TOOL, _parser(), {"get": get}, ["--home", str(home), "get"])
+    assert code == 1
+    err = json.loads(capsys.readouterr().err)
+    assert err["error"] == "home_unusable"
+
+
+class _FakeEvents:
+    def __init__(self):
+        self.url = "https://idp.example/u/login"
+        self.main_frame = object()
+
+    def on(self, *_args):
+        pass
+
+
+class _FakeBrowser:
+    def __init__(self):
+        self.page = _FakeEvents()
+        self.context = _FakeEvents()
+
+
+async def test_login_survives_a_start_page_that_redirects_mid_load(monkeypatch):
+    from skill_browser.errors import NotLoggedInError
+
+    monkeypatch.setattr(login.asyncio, "sleep", _instant)
+    answers = iter([False, True, True, True])
+
+    async def goto(_page, _url):
+        raise NotLoggedInError("redirected", code="redirected_to_sign_in")
+
+    async def check():
+        return next(answers, True)
+
+    already = await login.human_login(
+        _FakeBrowser(),
+        tool="demo",
+        start_url="https://site.example/",
+        check=check,
+        timeout_seconds=5,
+        goto=goto,
+        on_sign_in_form=lambda url: True,  # the IdP form is up
+    )
+    assert already is False  # went on to the human sign-in wait, did not abort
+
+
+async def test_login_settle_needs_stable_polls_for_already_signed_in(monkeypatch):
+    monkeypatch.setattr(login.asyncio, "sleep", _instant)
+    # One flash of "signed in" mid-redirect, then the IdP form for a while.
+    answers = iter([True, False, False, False, True, True, True])
+    seen = []
+
+    async def goto(_page, _url):
+        return None
+
+    async def check():
+        value = next(answers, True)
+        seen.append(value)
+        return value
+
+    already = await login.human_login(
+        _FakeBrowser(),
+        tool="demo",
+        start_url="https://site.example/",
+        check=check,
+        timeout_seconds=5,
+        goto=goto,
+        on_sign_in_form=lambda url: len(seen) >= 4,
+        settle_seconds=5,
+    )
+    assert already is False
+
+
+async def test_login_settle_accepts_a_stable_existing_session(monkeypatch):
+    monkeypatch.setattr(login.asyncio, "sleep", _instant)
+
+    async def goto(_page, _url):
+        return None
+
+    async def check():
+        return True
+
+    already = await login.human_login(
+        _FakeBrowser(),
+        tool="demo",
+        start_url="https://site.example/",
+        check=check,
+        timeout_seconds=5,
+        goto=goto,
+    )
+    assert already is True
+
+
+async def test_login_still_fails_on_real_navigation_errors():
+    from skill_browser.errors import ApiError
+
+    async def goto(_page, _url):
+        raise ApiError("net::ERR_NAME_NOT_RESOLVED", code="navigation_failed")
+
+    async def check():
+        return False
+
+    with pytest.raises(ApiError):
+        await login.human_login(
+            _FakeBrowser(),
+            tool="demo",
+            start_url="https://site.example/",
+            check=check,
+            timeout_seconds=5,
+            goto=goto,
+        )
+
+
+async def _instant(_seconds):
+    return None
+
+
+class _Chromium:
+    def __init__(self, fail_launch=False):
+        self.fail_launch = fail_launch
+        self.closed = False
+
+    async def launch(self, **_options):
+        if self.fail_launch:
+            raise RuntimeError("Executable doesn't exist")
+        return self
+
+    async def new_page(self):
+        return self
+
+    async def set_content(self, *_args, **_kwargs):
+        raise TimeoutError("Timeout 30000ms exceeded")
+
+    async def close(self):
+        self.closed = True
+
+
+class _RenderBrowser:
+    executable_path = None
+
+    def __init__(self, chromium):
+        self.playwright = type("P", (), {"chromium": chromium})()
+
+
+@pytest.mark.parametrize(
+    ("fail_launch", "stage"), [(True, "launch"), (False, "render")]
+)
+async def test_html_to_pdf_failures_are_typed(fail_launch, stage):
+    from skill_browser.errors import ApiError
+    from skill_browser.pdf import html_to_pdf
+
+    chromium = _Chromium(fail_launch=fail_launch)
+    with pytest.raises(ApiError) as info:
+        await html_to_pdf(_RenderBrowser(chromium), "<p>secret receipt</p>")
+    assert info.value.code == "pdf_render_failed"
+    assert info.value.exit_code == 9
+    assert info.value.details["stage"] == stage
+    assert "secret" not in str(info.value)
+    if stage == "render":
+        assert chromium.closed  # the throwaway browser is still closed

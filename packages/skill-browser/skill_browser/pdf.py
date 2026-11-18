@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from skill_browser.errors import PdfInvalidError
+from skill_browser.errors import ApiError, PdfInvalidError
 
 logger = logging.getLogger(__name__)
 
@@ -65,11 +65,22 @@ async def html_to_pdf(
     Patchright driver. It never sees the profile's cookies. Callers should
     strip scripts from *html* first and add a CSP that blocks script and
     ``connect-src``, so the offline copy cannot run code or phone home.
+
+    Launch, load and print failures (a stylesheet that never finishes loading,
+    say) raise :class:`ApiError` ``pdf_render_failed`` (exit 9) naming only the
+    exception type, never the HTML or a URL.
     """
     options: dict[str, Any] = {"headless": True}
     if getattr(browser, "executable_path", None):
         options["executable_path"] = browser.executable_path
-    scratch = await browser.playwright.chromium.launch(**options)
+    try:
+        scratch = await browser.playwright.chromium.launch(**options)
+    except Exception as exc:
+        raise ApiError(
+            f"Could not start the PDF render browser ({type(exc).__name__})",
+            code="pdf_render_failed",
+            stage="launch",
+        ) from exc
     try:
         page = await scratch.new_page()
         await page.set_content(html, wait_until="load", timeout=timeout_ms)
@@ -78,6 +89,12 @@ async def html_to_pdf(
             print_background=True,
             margin={"top": margin, "bottom": margin, "left": margin, "right": margin},
         )
+    except Exception as exc:
+        raise ApiError(
+            f"Printing the captured page to PDF failed ({type(exc).__name__})",
+            code="pdf_render_failed",
+            stage="render",
+        ) from exc
     finally:
         try:
             await scratch.close()

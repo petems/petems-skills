@@ -18,7 +18,7 @@ import sys
 from typing import Any
 from urllib.parse import urlsplit
 
-from skill_browser.errors import LoginTimeoutError, SkillError
+from skill_browser.errors import LoginTimeoutError, NotLoggedInError, SkillError
 
 logger = logging.getLogger(__name__)
 
@@ -113,19 +113,32 @@ async def human_login(
 
     *on_sign_in_form* (given the page URL) ends the settle wait early once the
     redirect chain has clearly landed on the identity provider's form.
+    "Already signed in" needs the same ``REQUIRED_STABLE_POLLS`` consecutive
+    passes as a manual login, so a dashboard flashed mid-redirect does not count.
     """
     page = browser.page
     log_window(page)
     browser.context.on("page", log_window)  # identity-provider popups
-    await goto(page, start_url)
+    try:
+        await goto(page, start_url)
+    except NotLoggedInError as exc:
+        # A start page that redirects to sign-in while loading is exactly
+        # what login expects: the human signs in next.
+        if exc.code != "redirected_to_sign_in":
+            raise
 
     # Give the redirect chain a chance to land before the first decision.
     loop = asyncio.get_running_loop()
     deadline = loop.time() + settle_seconds
+    stable = 0
     while loop.time() < deadline:
         if await poll_signed_in(check):
-            say("   Already signed in; keeping the existing session.")
-            return True
+            stable += 1
+            if stable >= REQUIRED_STABLE_POLLS:
+                say("   Already signed in; keeping the existing session.")
+                return True
+        else:
+            stable = 0
         try:
             if on_sign_in_form and on_sign_in_form(page.url):
                 break
