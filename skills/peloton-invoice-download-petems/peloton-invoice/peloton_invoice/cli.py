@@ -86,6 +86,7 @@ async def cmd_download(args: argparse.Namespace) -> None:
             history, month=month, year=args.year, invoice_id=args.invoice_id
         )
         html = await account.receipt_html(locale, invoice)
+        contract.check_capture_content(html, invoice)
         data = await html_to_pdf(browser, html)
         validate_pdf(200, "", data, min_bytes=PDF_MIN_BYTES, check_content_type=False)
         name = contract.invoice_filename(

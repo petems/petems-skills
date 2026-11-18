@@ -87,6 +87,16 @@ def build_parser(tool: Tool) -> tuple[argparse.ArgumentParser, Any]:
         default=tool.env("CHROME_PATH"),
         help="use this Chromium binary instead of patchright's",
     )
+    parser.add_argument(
+        "--diagnostic-screenshot",
+        action="store_true",
+        default=_env_flag(tool.env("DIAGNOSTIC_SCREENSHOT")),
+        help=(
+            "on a site-change, API or PDF error, also save a screenshot of the "
+            "page (it can show personal details; off by default; "
+            f"env {tool.env_prefix}_DIAGNOSTIC_SCREENSHOT=1)"
+        ),
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -143,7 +153,13 @@ async def diagnose_on_error(
     redact: Callable[[str], str] = diagnostics.redact_ids,
     screenshot: bool = True,
 ) -> AsyncIterator[None]:
-    """On a contract, API or PDF error, save diagnostics and list them in ``details``."""
+    """On a contract, API or PDF error, save diagnostics and list them in ``details``.
+
+    The redacted request log is always written. A screenshot is taken only
+    when the user passed ``--diagnostic-screenshot``, because signed-in pages
+    show names, account numbers and addresses. Pass ``screenshot=False`` for
+    a tool whose pages should never be captured, even on request.
+    """
     try:
         yield
     except DIAGNOSTIC_ERRORS as exc:
@@ -155,7 +171,8 @@ async def diagnose_on_error(
                 error=exc,
                 network=network,
                 redact=redact,
-                screenshot=screenshot,
+                screenshot=screenshot
+                and bool(getattr(args, "diagnostic_screenshot", False)),
             )
         except Exception:
             logging.getLogger(__name__).debug("Diagnostics failed", exc_info=True)

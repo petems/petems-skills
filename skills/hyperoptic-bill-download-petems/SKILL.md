@@ -72,14 +72,17 @@ Confirm parameters with the user before proceeding.
 
 Run one of these via Bash. Each opens a browser window, loads the account
 site and closes it again. Expect 10 to 30 seconds, longer for `--latest` if
-the current month has no bill yet (each empty month costs a few seconds).
+the current month has no bill yet (each empty month costs a few seconds). Pass the save location in
+**single** quotes so spaces, `$`, backticks and parentheses stay literal. The
+CLI expands a leading `~` itself, so `'~/Desktop'` works. If the path contains
+a single quote, write it as `'\''` inside the quotes.
 
 ```bash
-hyperoptic-bill download --latest --out "<SAVE_LOCATION>"
+hyperoptic-bill download --latest --out '<SAVE_LOCATION>'
 ```
 
 ```bash
-hyperoptic-bill download --month March --year 2026 --out "<SAVE_LOCATION>"
+hyperoptic-bill download --month March --year 2026 --out '<SAVE_LOCATION>'
 ```
 
 For several months, run one `download` per month, one after another. Never run
@@ -138,13 +141,17 @@ exit code:
 ### 3. Diagnostics on failure
 
 For exit codes 5 (site changed), 7 (no PDF, or not a plausible one) and 9
-(network failure), the CLI has already saved a screenshot and a redacted
-request log under `~/.hyperoptic-bill/diagnostics/`. Their paths are in the
+(network failure), the CLI has already saved a redacted request log
+under `~/.hyperoptic-bill/diagnostics/`. Its path is in the
 error's `details.diagnostics`. The log holds URL paths with ids replaced,
 status codes and redacted headers: no cookies, query strings or bodies.
 
 1. Report the error code (for example `view_bill_shape_changed`,
-   `no_download`) and both diagnostic paths to the user.
+   `no_download`) and the diagnostics path to the user.
+   If the log is not enough to see what changed, offer to re-run with
+   `--diagnostic-screenshot` (a global flag, before the command) to also
+   save a screenshot. Ask first: it can show the user's name, account
+   number and address.
 2. Point the user at `references/hyperoptic-site.md`. The snapshot may be out
    of date and need regenerating against the live site, with matching changes
    in `hyperoptic-bill/hyperoptic_bill/contract.py` and `site.py`.

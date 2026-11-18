@@ -184,9 +184,24 @@ class Hyperoptic:
                 )
             await target.select_option(label=label)
         else:
-            # A custom dropdown: open it and pick the option.
+            # A custom dropdown: open it, see what it offers, pick the option.
             try:
                 await target.click(timeout=5_000)
+                option_role = self.page.get_by_role("option")
+                await option_role.first.wait_for(timeout=5_000)
+                offered = [t.strip() for t in await option_role.all_inner_texts()]
+            except Exception as exc:
+                raise ContractChangedError(
+                    "Could not open the year selector",
+                    code="year_selector_missing",
+                ) from exc
+            if label not in offered:
+                raise NotFoundError(
+                    f"The bills page has no {year} in its year selector",
+                    code="year_not_available",
+                    available=[o for o in offered if re.fullmatch(r"20\d{2}", o)],
+                )
+            try:
                 await self.page.get_by_role("option", name=label, exact=True).click(
                     timeout=5_000
                 )

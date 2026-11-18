@@ -14,7 +14,7 @@ Chrome and never a `--remote-debugging-port` instance.
 | `nav` | `goto` that turns navigation failures into typed errors naming no URL, `wait_off_barrier` (lets an SSO bounce come back before deciding "signed out"), and `wait_for_stable_text` |
 | `errors` | Typed errors with one exit code per failure class (table below) |
 | `cli` | `Tool`, `build_parser` (global flags, `login`, `install-browser`), `add_output_args` (`--out`, `--overwrite`), `session`, `diagnose_on_error`, `run`, `emit` |
-| `diagnostics` | `NetworkLog` (method, redacted path, status, redacted headers; never bodies, tokens, cookies or query strings) and screenshot capture |
+| `diagnostics` | `NetworkLog` (method, redacted path, status, redacted headers; never bodies, tokens, cookies or query strings) and screenshot capture (only with `--diagnostic-screenshot`, since signed-in pages show personal details) |
 | `pdf` | `validate_pdf` and `html_to_pdf` (prints sanitised HTML in a throwaway headless browser) |
 | `files` | `write_private_atomic` (mode 0600, all or nothing, refuses to overwrite by default) and `safe_component` |
 | `months` | `MONTHS`, `parse_month` (`March`, `mar`, `3`) |

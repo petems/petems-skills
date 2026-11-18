@@ -46,6 +46,21 @@ def test_write_private_atomic_refuses_existing(tmp_path):
     assert [p.name for p in tmp_path.iterdir()] == ["bill.pdf"]
 
 
+def test_write_private_atomic_ignores_planted_symlinks(tmp_path):
+    """Review finding: a symlink at a guessable temp path must not be followed."""
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep me")
+    out = tmp_path / "out"
+    out.mkdir()
+    # The old predictable name, and a few plausible variants.
+    for name in (f".bill.pdf.{os.getpid()}.tmp", ".bill.pdf.tmp"):
+        (out / name).symlink_to(victim)
+    write_private_atomic(out / "bill.pdf", b"data")
+    assert victim.read_text() == "keep me"
+    assert (out / "bill.pdf").read_bytes() == b"data"
+    assert not (out / "bill.pdf").is_symlink()
+
+
 def test_write_private_atomic_overwrite(tmp_path):
     path = tmp_path / "bill.pdf"
     path.write_bytes(b"old")
@@ -231,22 +246,44 @@ def test_env_prefix_drives_defaults(tmp_path, monkeypatch):
     assert args.headless is True
 
 
-async def test_diagnose_on_error_attaches_paths(tmp_path):
-    class Page:
-        url = "https://x.example/account/1234567?code=secret"
+class _Page:
+    url = "https://x.example/account/1234567?code=secret"
 
-        async def screenshot(self, path):
-            Path(path).write_bytes(b"png")
+    async def screenshot(self, path):
+        Path(path).write_bytes(b"png")
 
-    args = _parser().parse_args(["--home", str(tmp_path), "get"])
+
+async def _diagnose(tmp_path, argv, **kwargs):
+    args = _parser().parse_args(["--home", str(tmp_path), *argv, "get"])
     args.home = tmp_path
     with pytest.raises(PdfInvalidError) as info:
-        async with cli.diagnose_on_error(TOOL, args, lambda: Page(), None):
+        async with cli.diagnose_on_error(TOOL, args, lambda: _Page(), None, **kwargs):
             raise PdfInvalidError("bad", code="pdf_not_pdf")
-    paths = info.value.details["diagnostics"]
+    return info.value.details["diagnostics"]
+
+
+async def test_diagnose_on_error_writes_log_but_no_screenshot_by_default(tmp_path):
+    """Review finding: signed-in pages show personal details, so no PNG unless asked."""
+    paths = await _diagnose(tmp_path, [])
     log = json.loads(Path(paths["network_log"]).read_text())
     assert log == {"error": "pdf_not_pdf", "page": "/account/<id>", "requests": []}
+    assert "screenshot" not in paths
+    assert not list((tmp_path / "diagnostics").glob("*.png"))
+
+
+async def test_diagnose_on_error_screenshot_when_asked(tmp_path):
+    paths = await _diagnose(tmp_path, ["--diagnostic-screenshot"])
     assert os.stat(paths["screenshot"]).st_mode & 0o777 == 0o600
+
+
+async def test_tool_can_forbid_screenshots_even_when_asked(tmp_path):
+    paths = await _diagnose(tmp_path, ["--diagnostic-screenshot"], screenshot=False)
+    assert "screenshot" not in paths
+
+
+def test_diagnostic_screenshot_env(monkeypatch):
+    monkeypatch.setenv("DEMO_TOOL_DIAGNOSTIC_SCREENSHOT", "1")
+    assert _parser().parse_args(["get"]).diagnostic_screenshot is True
 
 
 async def test_diagnose_on_error_ignores_other_errors(tmp_path):

@@ -48,8 +48,13 @@ YEARS = sorted({y for _m, y in BILLS} | {TODAY.year}, reverse=True)
 BILLS_HTML = """<!doctype html><html><head><meta charset="utf-8"></head><body>
 <nav>Dashboard</nav><h1>Bills and payments</h1>
 <button onclick="this.remove()">Accept all cookies</button>
-<select aria-label="Year" onchange="location.search='?year='+this.value">%(options)s</select>
+%(selector)s
 <ul>%(months)s</ul></body></html>"""
+
+# A non-<select> year picker: a combobox that reveals role=option items.
+CUSTOM_SELECTOR = """<div role="combobox" aria-label="Year" tabindex="0"
+  onclick="document.getElementById('years').hidden = false">%(year)s</div>
+<ul id="years" role="listbox" hidden>%(items)s</ul>"""
 
 VIEW_HTML = """<!doctype html><html><head><meta charset="utf-8"></head><body><nav>Dashboard</nav><div id="root"></div><script>
 setTimeout(() => {
@@ -67,6 +72,7 @@ FETCH_BUTTON = "<button onclick=\"fetch('/billing/%(id)s/pdf?inline=1')\">Downlo
 class FakeSite:
     def __init__(self) -> None:
         self.download_mode = "attachment"  # or "fetch"
+        self.custom_selector = False  # a div combobox instead of a <select>
 
 
 def make_handler(state: FakeSite):
@@ -115,7 +121,19 @@ def make_handler(state: FakeSite):
                         )
                     else:
                         months.append(f"<li><span>{m}</span></li>")
-                html = BILLS_HTML % {"options": options, "months": "".join(months)}
+                if state.custom_selector:
+                    items = "".join(
+                        f'<li role="option" onclick="location.search=\'?year={y}\'">{y}</li>'
+                        for y in YEARS
+                    )
+                    selector = CUSTOM_SELECTOR % {"year": year, "items": items}
+                else:
+                    selector = (
+                        '<select aria-label="Year" '
+                        "onchange=\"location.search='?year='+this.value\">"
+                        f"{options}</select>"
+                    )
+                html = BILLS_HTML % {"selector": selector, "months": "".join(months)}
                 return self.send(200, html.encode())
             if parts.path == "/bills-and-payments/view-bill":
                 invoice = query.get("invoiceId", [""])[0]
@@ -278,3 +296,21 @@ async def test_signed_out_fails_fast_with_login_hint(tmp_path, fake):
         assert not await hyper.is_signed_in()
     finally:
         await cm.__aexit__(None, None, None)
+
+
+async def test_custom_dropdown_picks_a_year(launched):
+    state, site, browser = launched
+    state.custom_selector = True
+    month, year = _shift(12)
+    bill = await Hyperoptic(browser, site).find_bill(month, year)
+    assert (bill.invoiceId, bill.month, bill.year) == ("83000001", month, year)
+
+
+async def test_custom_dropdown_missing_year_lists_choices(launched):
+    """A year the custom dropdown lacks is not a site change: list what it offers."""
+    state, site, browser = launched
+    state.custom_selector = True
+    with pytest.raises(NotFoundError) as info:
+        await Hyperoptic(browser, site).find_bill("May", 2001)
+    assert info.value.code == "year_not_available"
+    assert str(TODAY.year) in info.value.details["available"]

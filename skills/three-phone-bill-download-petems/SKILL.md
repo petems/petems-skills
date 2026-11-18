@@ -74,14 +74,17 @@ Confirm parameters with the user before proceeding.
 ### 2. Download the bill
 
 Run one of these via Bash. Each opens a browser window briefly, loads My3 and
-closes it again. Expect it to take 10 to 30 seconds.
+closes it again. Expect it to take 10 to 30 seconds. Pass the save location in
+**single** quotes so spaces, `$`, backticks and parentheses stay literal. The
+CLI expands a leading `~` itself, so `'~/Desktop'` works. If the path contains
+a single quote, write it as `'\''` inside the quotes.
 
 ```bash
-three-bill download --latest --out "<SAVE_LOCATION>"
+three-bill download --latest --out '<SAVE_LOCATION>'
 ```
 
 ```bash
-three-bill download --month March --year 2026 --out "<SAVE_LOCATION>"
+three-bill download --month March --year 2026 --out '<SAVE_LOCATION>'
 ```
 
 On success it prints one JSON object on stdout:
@@ -141,13 +144,17 @@ billEndDate, billPeriod}, ...]}`, newest first. The same exit codes apply.
 
 For exit codes 5 (API contract changed), 7 (the PDF response was not a bill)
 and 9 (unexpected status or network failure), the CLI has already saved a
-screenshot and a redacted request log under `~/.three-bill/diagnostics/`. Their
-paths are in the error's `details.diagnostics`. The log holds URL paths with
+redacted request log under `~/.three-bill/diagnostics/`. Its
+path is in the error's `details.diagnostics`. The log holds URL paths with
 the customer and billing ids replaced, status codes and redacted headers: no
 tokens, cookies or bodies.
 
 1. Report the error code (for example `seed_shape_changed`,
-   `pdf_content_type:text/html`) and both diagnostic paths to the user.
+   `pdf_content_type:text/html`) and the diagnostics path to the user.
+   If the log is not enough to see what changed, offer to re-run with
+   `--diagnostic-screenshot` (a global flag, before the command) to also
+   save a screenshot. Ask first: it can show the user's name, account
+   number and address.
 2. Point the user at `references/three-api-endpoints.md`. The snapshot may be
    out of date and need regenerating against the live SPA, with matching
    changes in `three-bill/three_bill/contract.py`.

@@ -481,6 +481,49 @@ def test_receipt_mismatch_names_failed_checks():
     assert info.value.details["failed"] == ["hasAmount"]
 
 
+@pytest.mark.parametrize(
+    ("text", "ok"),
+    [
+        ("Total £45.00 paid", True),
+        ("Total\n45.00\n", True),
+        ("Total £145.00 paid", False),
+        ("Total £1,045.00 paid", False),
+        ("Total £45.001", False),
+        ("Total £0.45.00", False),
+    ],
+)
+def test_amount_must_be_a_whole_number(text, ok):
+    """Review finding: 45.00 must not pass on a receipt that says 145.00."""
+    assert contract.has_amount(text, "45.00") is ok
+
+
+def test_receipt_with_a_larger_total_is_a_mismatch():
+    with pytest.raises(ContractChangedError) as info:
+        contract.check_receipt_text(RECEIPT.replace("£45.00", "£145.00"), OCT)
+    assert info.value.details["failed"] == ["hasAmount"]
+
+
+CAPTURE = (
+    "<!DOCTYPE html><html><head><style>.x{content:'45.00'}</style></head>"
+    "<body><p>Peloton Interactive UK Limited</p><p>VAT ID Number GB1</p>"
+    "<td>07/10/2026</td><td>&pound;45.00</td><p>Total amount paid</p></body></html>"
+)
+
+
+def test_capture_content_passes():
+    contract.check_capture_content(CAPTURE, OCT)
+
+
+def test_capture_that_lost_the_receipt_fails():
+    """Sanitising once stripped the whole receipt; the printed HTML is re-checked."""
+    stripped = "<!DOCTYPE html><html><head><style>.x{content:'45.00'}</style></head><body></body></html>"
+    with pytest.raises(ContractChangedError) as info:
+        contract.check_capture_content(stripped, OCT)
+    assert info.value.code == "capture_mismatch"
+    # Text inside <style> does not count as receipt content.
+    assert "hasAmount" in info.value.details["failed"]
+
+
 def test_receipt_without_amount_skips_amount_check():
     no_amount = make(hexid(1), SUB1, "2026-10-07T19:00:00Z", amount=None)
     assert "hasAmount" not in contract.receipt_checks(RECEIPT, no_amount)

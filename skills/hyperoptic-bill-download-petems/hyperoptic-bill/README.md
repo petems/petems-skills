@@ -67,10 +67,12 @@ warnings}`. `via` is `download` (the browser download event) or `network`
 | 9 | `navigation_failed`, `navigation_timeout` | Network problem reaching the site |
 | 10 | `output_exists` | The file already exists; pass `--overwrite` to replace it |
 
-Errors are JSON on stderr. For exit codes 5, 7 and 9 a screenshot and a
-redacted request log (paths with ids replaced, status codes, redacted headers,
-no bodies) are written under `~/.hyperoptic-bill/diagnostics/` and listed in
-`details.diagnostics`.
+Errors are JSON on stderr. For exit codes 5, 7 and 9 a redacted request log
+(paths with ids replaced, status codes, redacted headers, no bodies) is
+written under `~/.hyperoptic-bill/diagnostics/` and listed in
+`details.diagnostics`. Add `--diagnostic-screenshot` to also save a
+screenshot of the page; it is off by default because the page can show your
+name, account number and address.
 
 ## Develop
 

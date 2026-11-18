@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import re
+import tempfile
 
 from skill_browser.errors import OutputExistsError
 
@@ -23,6 +24,10 @@ def write_private_atomic(path: Path, data: bytes, *, overwrite: bool = False) ->
     Writes a temp file beside the target, fsyncs it, then either replaces the
     target (``overwrite``) or hard-links it into place, which fails atomically
     if the target already exists. A half-written file is never visible.
+
+    The temp file comes from :func:`tempfile.mkstemp`: a random name, created
+    with ``O_EXCL`` and mode 0600, so a symlink planted in a shared output
+    directory cannot redirect the write.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     if not overwrite and path.exists():
@@ -30,9 +35,11 @@ def write_private_atomic(path: Path, data: bytes, *, overwrite: bool = False) ->
             f"{path} already exists. Re-run with --overwrite to replace it.",
             path=str(path),
         )
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    tmp = Path(tmp_name)
     try:
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "wb") as handle:
             handle.write(data)
             handle.flush()

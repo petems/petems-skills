@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from html import unescape
 import json
 import math
 import re
@@ -570,15 +571,22 @@ def sanity_warnings(invoice: Invoice, locale: str) -> list[str]:
 # -- receipt -----------------------------------------------------------------
 
 
+def has_amount(text: str, amount: str) -> bool:
+    """*amount* as a whole number in *text*: ``45.00`` matches ``£45.00``, not ``145.00``."""
+    pattern = r"(?<![\d.,])" + re.escape(amount) + r"(?![\d])"
+    return re.search(pattern, text) is not None
+
+
 def receipt_checks(text: str, invoice: Invoice) -> dict[str, bool]:
     """Cross-check the rendered receipt against the API before capturing it."""
     checks = {
         "hasEntity": "Peloton Interactive" in text,
         "hasVat": "VAT ID Number" in text,
+        "hasTotal": RECEIPT_MARKER in text,
         "hasDate": invoice.displayDate in text,
     }
     if invoice.amount is not None:
-        checks["hasAmount"] = invoice.amount in text
+        checks["hasAmount"] = has_amount(text, invoice.amount)
     return checks
 
 
@@ -599,6 +607,29 @@ _CAPTURE_ERRORS = {
     "wrong_page": ContractChangedError,
     "receipt_not_rendered": ApiError,
 }
+
+
+def html_text(html: str) -> str:
+    """Rough visible text of captured HTML, for content checks only."""
+    body = re.sub(r"(?is)<(style|head)\b.*?</\1\s*>", " ", html)
+    return unescape(re.sub(r"<[^>]+>", " ", body))
+
+
+def check_capture_content(html: str, invoice: Invoice) -> None:
+    """The sanitised HTML that gets printed must still show this receipt.
+
+    The page is checked before capture, but sanitising can strip content (a
+    class-substring selector once deleted the whole receipt and printed a
+    blank page), so the exact HTML that is printed is checked again.
+    """
+    checks = receipt_checks(html_text(html), invoice)
+    failed = [name for name, ok in checks.items() if not ok]
+    if failed:
+        raise ContractChangedError(
+            "The captured receipt lost content the page showed",
+            code="capture_mismatch",
+            failed=failed,
+        )
 
 
 def validate_capture(result: Any) -> str:
