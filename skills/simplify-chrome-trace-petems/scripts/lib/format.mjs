@@ -38,9 +38,17 @@ export function fmtBound(x) {
 
 export const MAX_CELL = 120;
 
-// Control characters, and bidi / zero-width characters that can make text
-// read differently from what it contains.
-const HIDDEN_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
+// Characters that end a line somewhere: CR, LF, tab, NEL (U+0085), and the
+// Unicode line and paragraph separators (U+2028, U+2029). Each becomes a space.
+const LINE_BREAKS = /\r\n|[\r\n\t\u0085\u2028\u2029]/g;
+
+// Characters that are removed: every control character (`\p{Cc}`: C0, DEL and
+// C1), and the format characters that can make text read differently from
+// what it contains: bidi marks, embeddings, overrides and isolates (including
+// U+061C), zero-width characters, word joiner and invisible operators, BOM,
+// interlinear annotation marks, and the invisible tag characters
+// (U+E0000-U+E007F) that can smuggle hidden text.
+const HIDDEN_CHARS = /[\p{Cc}\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff\ufff9-\ufffb\u{e0000}-\u{e007f}]/gu;
 
 /**
  * Make trace-controlled text safe to place in the report: one line, no
@@ -50,7 +58,7 @@ const HIDDEN_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u200b-\u200f
  */
 export function cleanText(v) {
   const s = v === null || v === undefined ? '' : String(v);
-  return s.replace(/\r\n|\r|\n|\t/g, ' ').replace(HIDDEN_CHARS, '');
+  return s.replace(LINE_BREAKS, ' ').replace(HIDDEN_CHARS, '');
 }
 
 // Markdown that could make trace text active in a preview: `[` `]` (links,

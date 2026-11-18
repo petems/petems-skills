@@ -23,6 +23,7 @@ Summarise a Chrome DevTools performance trace into a compact markdown report.
   --wall-clock          add UTC columns (needs metadata.startTime)
   --format md|json      output format (default md)
   --out FILE            write to FILE, print a one-line note to stderr
+  --max-input-mb N      refuse input (after gunzip) over N MB (default 4096)
   --list                print section keys and descriptions, exit 0
   -h, --help            usage, exit 0
 `;
@@ -34,7 +35,7 @@ export function listText() {
   return lines.join('\n') + '\n';
 }
 
-const VALUE_FLAGS = new Set(['--top', '--long-task-ms', '--window', '--bucket', '--thread', '--only', '--except', '--match', '--format', '--out']);
+const VALUE_FLAGS = new Set(['--top', '--long-task-ms', '--window', '--bucket', '--thread', '--only', '--except', '--match', '--format', '--out', '--max-input-mb']);
 const BOOL_FLAGS = new Set(['--all', '--wall-clock', '--list', '--help', '-h']);
 
 function positiveNumber(flag, v, integer = false) {
@@ -113,6 +114,11 @@ export function parseArgs(argv) {
   if (raw['--match'] !== undefined) {
     makeMatcher(raw['--match']); // validate regex early
     options.match = raw['--match'];
+  }
+  if (raw['--max-input-mb'] !== undefined) {
+    options.maxInputMb = positiveNumber('--max-input-mb', raw['--max-input-mb']);
+    // Below one byte the limit would reject every file.
+    if (options.maxInputMb * 1024 * 1024 < 1) throw new UsageError(`--max-input-mb is too small, got ${raw['--max-input-mb']}`);
   }
   if (raw['--wall-clock']) options.wallClock = true;
   if (raw['--format'] !== undefined) {

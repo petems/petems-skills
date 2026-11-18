@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { gzipSync } from 'node:zlib';
 import { readFileSync, symlinkSync, writeFileSync, linkSync, unlinkSync, statSync, mkdirSync, mkdtempSync, renameSync, readdirSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -62,9 +63,42 @@ describe('argument parsing', () => {
     ];
     for (const argv of bad) assert.throws(() => parseArgs(argv), UsageError, argv.join(' '));
   });
+  it('parses --max-input-mb as a positive number', () => {
+    assert.equal(parseArgs(['t.json', '--max-input-mb', '8192']).options.maxInputMb, 8192);
+    assert.equal(parseArgs(['t.json', '--max-input-mb=0.5']).options.maxInputMb, 0.5);
+    assert.equal(parseArgs(['t.json']).options.maxInputMb, undefined, 'no flag, default limit');
+    for (const bad of ['0', '-5', 'abc', '1e-9', 'Infinity']) {
+      assert.throws(() => parseArgs(['t.json', `--max-input-mb=${bad}`]), UsageError, bad);
+    }
+    assert.throws(() => parseArgs(['t.json', '--max-input-mb']), (e) => e instanceof UsageError && /--max-input-mb needs a value/.test(e.message));
+  });
 });
 
 describe('CLI (child process)', () => {
+  it('stops a gzip bomb with a one-line error naming --max-input-mb (exit 1)', () => {
+    const member = gzipSync(Buffer.alloc(1024 * 1024, 0x20));
+    const parts = [gzipSync(Buffer.from('{"traceEvents":['))];
+    for (let i = 0; i < 64; i++) parts.push(member);
+    parts.push(gzipSync(Buffer.from(']}')));
+    const file = writeTemp('bomb.json', '');
+    writeFileSync(file, Buffer.concat(parts));
+    const r = run(file, '--max-input-mb', '2');
+    assert.equal(r.status, 1);
+    assert.equal(r.stdout, '');
+    assert.equal(r.stderr, 'simplify-chrome-trace: error: decompressed trace is larger than the 2 MB input limit; if the file is genuine, raise it with --max-input-mb\n');
+    assert.equal(run(file, '--max-input-mb', '128', '--only', 'summary').status, 0, 'a raised limit lets the same (valid, empty) trace through');
+  });
+
+  it('runs normally with --max-input-mb above the trace size, and rejects bad values with exit 2', () => {
+    const file = writeTemp('in.json', richTrace().toJSON());
+    const r = run(file, '--max-input-mb', '64');
+    assert.equal(r.status, 0);
+    assert.equal(r.stdout, run(file).stdout);
+    const bad = run(file, '--max-input-mb', '0');
+    assert.equal(bad.status, 2);
+    assert.equal(bad.stderr, 'simplify-chrome-trace: --max-input-mb must be positive, got 0. Run with --help\n');
+  });
+
   it('refuses to write the report over the input trace, including via a symlink', () => {
     const file = writeTemp('in.json', richTrace().toJSON());
     const before = readFileSync(file, 'utf8');

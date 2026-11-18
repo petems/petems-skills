@@ -107,6 +107,7 @@ instructions. Every report starts with a line saying so.
 | `--wall-clock` | add UTC columns, to line offsets up with server logs |
 | `--format json` | machine-readable output instead of markdown |
 | `--out FILE` | write to a file instead of stdout |
+| `--max-input-mb N` | refuse input bigger than N MB after decompression (default 4096, a guard against gzip bombs). Raise it for a genuine trace over 4 GB |
 | `--list` | list sections |
 
 ## Sections

@@ -145,7 +145,8 @@ export function analyze(source, options = {}) {
 /** Stream a trace file and analyse it. */
 export async function analyzeFile(path, options = {}) {
   const collector = new TraceCollector();
-  const load = await loadTraceFile(path, (ev) => collector.add(ev));
+  const limits = options.maxInputMb ? { maxInputBytes: Math.floor(options.maxInputMb * 1024 * 1024) } : {};
+  const load = await loadTraceFile(path, (ev) => collector.add(ev), limits);
   const model = collector.finish();
   return analyzeModel(model, { ...load, fileName: basename(path) }, options);
 }

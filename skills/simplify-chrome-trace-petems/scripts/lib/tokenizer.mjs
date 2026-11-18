@@ -12,6 +12,12 @@
 // store multi-MB source maps in `metadata`) costs linear time rather than
 // re-copying a growing prefix on every chunk.
 //
+// Memory is bounded: a captured value (one event, the metadata object, or a
+// top-level key) may not grow past `maxValueChars` while its pieces are
+// being collected, and at most `maxEvents` events are accepted. Either limit
+// is a single-line UserError, so a small but highly compressible file cannot
+// make the tokenizer buffer gigabytes.
+//
 // The top-level structure is validated strictly (commas between elements,
 // no trailing commas, nothing after the end); event contents are validated
 // by JSON.parse.
@@ -38,15 +44,26 @@ const KIND_PRIMITIVE = 2;
 const TARGET_DISCARD = 0;
 const TARGET_EVENT = 1;
 const TARGET_METADATA = 2;
+const TARGET_KEY = 3; // only used to name a top-level key in errors
+
+/** Largest single value (event, metadata object or key), in UTF-16 code units. */
+export const DEFAULT_MAX_VALUE_CHARS = 256 * 1024 * 1024;
+/** Most events accepted from one trace. */
+export const DEFAULT_MAX_EVENTS = 50_000_000;
 
 function isWs(c) {
   return c === 32 || c === 10 || c === 13 || c === 9 || c === 0xfeff;
 }
 
 export class TraceTokenizer {
-  /** @param {(event: any) => void} onEvent */
-  constructor(onEvent) {
+  /**
+   * @param {(event: any) => void} onEvent
+   * @param {{maxValueChars?: number, maxEvents?: number}} [limits]
+   */
+  constructor(onEvent, limits = {}) {
     this.onEvent = onEvent;
+    this.maxValueChars = limits.maxValueChars || DEFAULT_MAX_VALUE_CHARS;
+    this.maxEvents = limits.maxEvents || DEFAULT_MAX_EVENTS;
     this.state = START;
     this.topIsArray = false;
     this.eventsInObject = false;
@@ -58,6 +75,7 @@ export class TraceTokenizer {
     this.keyStart = 0;
     this.keyEsc = false;
     this.keyParts = []; // pieces of a key that spans chunks
+    this.keyLen = 0; // total length of keyParts
     // value scanner
     this.vStart = 0;
     this.vDepth = 0;
@@ -67,6 +85,7 @@ export class TraceTokenizer {
     this.vTarget = TARGET_DISCARD;
     this.vReturn = OBJ_AFTER_VALUE;
     this.vParts = []; // pieces of a captured value that spans chunks
+    this.vLen = 0; // total length of vParts
     this.warnings = [];
   }
 
@@ -90,8 +109,19 @@ export class TraceTokenizer {
     }
   }
 
+  /** Throw when a captured value of `len` code units is over the limit. */
+  _checkValueSize(len, target) {
+    if (len <= this.maxValueChars) return;
+    const mb = Math.round(this.maxValueChars / (1024 * 1024));
+    const what = target === TARGET_EVENT ? `trace event #${this.eventCount + 1}` : target === TARGET_METADATA ? 'the metadata object' : 'a top-level key';
+    throw new UserError(`${what} is larger than the ${mb} MB limit for a single value; the trace is malformed or hostile`);
+  }
+
   _finishValue(text) {
     if (this.vTarget === TARGET_EVENT) {
+      if (this.eventCount >= this.maxEvents) {
+        throw new UserError(`trace has more than ${this.maxEvents.toLocaleString('en-US')} events, the most this tool accepts; record a shorter trace`);
+      }
       let ev;
       try {
         ev = JSON.parse(text);
@@ -166,9 +196,11 @@ export class TraceTokenizer {
         this.vEsc = e;
         if (ended >= 0) {
           if (this.vTarget !== TARGET_DISCARD) {
+            this._checkValueSize(this.vLen + (ended - this.vStart), this.vTarget);
             const tail = buf.slice(this.vStart, ended);
             this._finishValue(this.vParts.length ? this.vParts.join('') + tail : tail);
             this.vParts = [];
+            this.vLen = 0;
           }
           state = this.vReturn;
           if (reprocess) continue;
@@ -217,6 +249,7 @@ export class TraceTokenizer {
           if (this.keyEsc) this.keyEsc = false;
           else if (c === 92) this.keyEsc = true;
           else if (c === 34) {
+            this._checkValueSize(this.keyLen + (i + 2 - this.keyStart), TARGET_KEY);
             const tail = buf.slice(this.keyStart - 1, i + 1);
             try {
               this.key = JSON.parse(this.keyParts.length ? this.keyParts.join('') + tail : tail);
@@ -224,6 +257,7 @@ export class TraceTokenizer {
               this.key = '';
             }
             this.keyParts = [];
+            this.keyLen = 0;
             state = OBJ_COLON;
           }
           break;
@@ -284,11 +318,17 @@ export class TraceTokenizer {
 
     // Keep the piece of any partial token; the next chunk continues it from
     // index 0.
+    // A captured value is checked against the size limit before its piece is
+    // kept, so an oversized value is rejected before it is fully buffered.
     if (state === VALUE && this.vTarget !== TARGET_DISCARD) {
+      this._checkValueSize(this.vLen + (n - this.vStart), this.vTarget);
       this.vParts.push(buf.slice(this.vStart));
+      this.vLen += n - this.vStart;
       this.vStart = 0;
     } else if (state === OBJ_KEY) {
+      this._checkValueSize(this.keyLen + (n - this.keyStart + 1), TARGET_KEY);
       this.keyParts.push(buf.slice(this.keyStart - 1));
+      this.keyLen += n - this.keyStart + 1;
       this.keyStart = 1;
     } else {
       this.vStart = 0;
@@ -329,9 +369,10 @@ export class TraceTokenizer {
  * @param {string} text
  * @param {(event:any)=>void} onEvent
  * @param {number} [chunkSize]
+ * @param {{maxValueChars?: number, maxEvents?: number}} [limits]
  */
-export function tokenizeString(text, onEvent, chunkSize = 1 << 20) {
-  const tok = new TraceTokenizer(onEvent);
+export function tokenizeString(text, onEvent, chunkSize = 1 << 20, limits = {}) {
+  const tok = new TraceTokenizer(onEvent, limits);
   for (let i = 0; i < text.length; i += chunkSize) tok.push(text.slice(i, i + chunkSize));
   return tok.end();
 }

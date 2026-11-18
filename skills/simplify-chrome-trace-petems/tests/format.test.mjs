@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { escapeCell, mdText, mdTable, fmtMs, fmtCount, shortUrl, joinBlocks, makeUtc, urlBasename } from '../scripts/lib/format.mjs';
+import { cleanText, escapeCell, mdText, mdTable, fmtMs, fmtCount, shortUrl, joinBlocks, makeUtc, urlBasename } from '../scripts/lib/format.mjs';
 import { makeMatcher } from '../scripts/lib/match.mjs';
 import { parseWindowSpec, resolveWindow } from '../scripts/lib/window.mjs';
 import { UsageError, UserError } from '../scripts/lib/errors.mjs';
@@ -14,6 +14,28 @@ describe('markdown formatting', () => {
     assert.ok(long.endsWith('...'));
     assert.equal(mdTable(['a', 'b'], [['1|2', '3']]), '| a | b |\n| --- | --- |\n| 1\\|2 | 3 |');
     assert.equal(mdTable(['a', 'b'], [['', 'x']]), '| a | b |\n| --- | --- |\n| | x |', 'empty cell is a single space');
+  });
+
+  it('turns NEL and Unicode line and paragraph separators into spaces', () => {
+    assert.equal(cleanText('a\u2028b\u2029c\u0085d'), 'a b c d');
+    assert.equal(escapeCell('a\u2028## b'), 'a ## b');
+    assert.equal(mdText('x\u2029y'), 'x y');
+  });
+
+  it('strips C1 controls and other invisible format characters', () => {
+    assert.equal(cleanText('a\u0080b\u009bc\u009fd'), 'abcd', 'C1 controls');
+    assert.equal(cleanText('a\u000bb\u000cc\u007fd'), 'abcd', 'VT, FF and DEL');
+    assert.equal(cleanText('a\u061cb\u206ac\ufff9d\ufffbe'), 'abcde', 'Arabic letter mark, deprecated format, annotation marks');
+    assert.equal(cleanText('ok\u{e0049}\u{e0047}\u{e004e}'), 'ok', 'invisible tag characters');
+    for (const s of [cleanText(String.fromCharCode(...Array.from({ length: 0xa0 }, (_, i) => i)))]) {
+      assert.ok(!/[\p{Cc}]/u.test(s), 'no control character survives');
+    }
+  });
+
+  it('keeps ordinary text, other scripts and emoji intact', () => {
+    for (const s of ['RunTask', 'naïve café', '中文名称', 'العربية', 'עברית', 'Ελληνικά', 'Привет', 'नमस्ते', '😀🚀', 'a\u00a0b']) {
+      assert.equal(cleanText(s), s);
+    }
   });
 
   it('backslash-escapes link, image, HTML and code-span markup, after truncating', () => {

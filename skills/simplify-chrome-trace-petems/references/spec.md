@@ -46,9 +46,25 @@ The tool is read-only. It never modifies the trace.
   closing `]` (truncation) is the only tolerated defect.
 * Events are handed to collectors as they stream in. Collectors keep compact
   records only (not whole raw events with big `args` blobs) where practical.
+* Input limits, so a small, highly compressible file (a gzip bomb) cannot
+  exhaust memory. Each is a single-line error (exit code 1):
+  * Total input: at most 4096 MB of bytes read (plain file, checked against
+    the file size before reading) or produced by the decompressor (gzip,
+    counted as the stream runs and stopped at once when exceeded). That is
+    about 15x the largest real traces seen, and still finishes in about a
+    minute. `--max-input-mb N` changes it, and the error names that flag.
+  * Single value: one event, the `metadata` object or a top-level key may
+    not exceed 256 MB (UTF-16 code units). The tokenizer checks the pieces'
+    total length as they are collected, so an oversized value is rejected
+    before it is fully buffered. DevTools can embed multi-MB source maps in
+    `metadata`, so the limit is generous; it also stays under V8's ~512 MB
+    string cap. Values that are skipped (unknown top-level keys) are never
+    buffered and only count towards the total.
+  * Event count: at most 50,000,000 events (real traces have about a
+    million), which bounds the compact records the collectors keep.
 * Clear, single-line errors (exit code 1) for: file not found, not JSON, no
-  `traceEvents` array and not an array. Never dump a stack trace for user
-  errors.
+  `traceEvents` array and not an array, and the input limits above. Never
+  dump a stack trace for user errors.
 
 ## Trace event basics the tool relies on
 
@@ -454,6 +470,7 @@ node scripts/simplify-chrome-trace.mjs <trace.json[.gz]> [options]
   --wall-clock          add UTC columns (needs metadata.startTime)
   --format md|json      output format (default md)
   --out FILE            write to FILE, print a one-line note to stderr
+  --max-input-mb N      refuse input (after gunzip) over N MB (default 4096)
   --list                print section keys and descriptions, exit 0
   -h, --help            usage, exit 0
 ```
@@ -493,11 +510,13 @@ node scripts/simplify-chrome-trace.mjs <trace.json[.gz]> [options]
 * Trace text is untrusted: names, marks, URLs, function names and messages
   come from the recorded page. Every markdown report starts with a one-line
   blockquote saying so, and `--format json` carries the same text in a
-  top-level `notice` field. All trace text is reduced to one line with
-  control, bidi and zero-width characters removed, so it cannot start its
-  own markdown lines or hide what it says. This covers table cells and every
-  piece of prose built from the trace: thread and process names (cleaned when
-  collected), the file name, metadata fields and warnings. JSON output gets
+  top-level `notice` field. All trace text is reduced to one line (CR, LF,
+  tab, NEL and the Unicode line and paragraph separators U+2028 and U+2029
+  become spaces) with control characters (C0, DEL and C1), bidi and
+  zero-width characters, and invisible tag characters removed, so it cannot
+  start its own markdown lines or hide what it says. This covers table cells
+  and every piece of prose built from the trace: thread and process names
+  (cleaned when collected), the file name, metadata fields and warnings. JSON output gets
   the same cleaning: every string in the document (keys included, except the
   fixed `notice`) is cleaned before serialization, so parsed values carry no
   newline, control, bidi or zero-width characters.
